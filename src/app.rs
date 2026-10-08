@@ -1,24 +1,17 @@
 //! Application abstraction.
 //!
-//! The `App` is the main user-facing type. In Phase 1, it wraps a single
-//! handler. In Phase 3, it will hold a router. In Phase 6, it will support
-//! middleware.
+//! The `App` is the main user-facing type. It provides an Express-like
+//! API for registering routes and middleware.
 
 use crate::error::Error;
 use crate::request::Request;
 use crate::response::Response;
+use crate::router::{Next, Router};
 use crate::server::Server;
+use std::future::Future;
+use std::sync::Arc;
 
 /// The Express-rs application.
-///
-/// # Phase 1
-///
-/// The app holds a single request handler. All requests are routed to it.
-///
-/// # Future Phases
-///
-/// - Phase 3: Router with `app.get()`, `app.post()`, etc.
-/// - Phase 6: Middleware with `app.use()`
 ///
 /// # Example
 ///
@@ -29,7 +22,7 @@ use crate::server::Server;
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let mut app = App::new();
 ///
-///     app.handler(|_req, mut res| async move {
+///     app.get("/", |_req, mut res, _next| async move {
 ///         res.status(200).text("Hello, World!");
 ///         res
 ///     });
@@ -40,6 +33,7 @@ use crate::server::Server;
 /// ```
 pub struct App {
     server: Server,
+    router: Router,
 }
 
 impl App {
@@ -47,25 +41,105 @@ impl App {
     pub fn new() -> Self {
         Self {
             server: Server::new(),
+            router: Router::new(),
         }
     }
 
-    /// Set the request handler.
-    ///
-    /// In Phase 1, this is a single handler for all requests. It will be
-    /// replaced by router-based dispatch in Phase 3.
-    pub fn handler<F, Fut>(&mut self, f: F)
+    /// Register a handler for GET requests.
+    pub fn get<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Request, Response) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Response> + Send + 'static,
+        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
     {
-        self.server.set_handler(f);
+        self.router.get(path, handler);
+    }
+
+    /// Register a handler for POST requests.
+    pub fn post<F, Fut>(&mut self, path: &str, handler: F)
+    where
+        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
+    {
+        self.router.post(path, handler);
+    }
+
+    /// Register a handler for PUT requests.
+    pub fn put<F, Fut>(&mut self, path: &str, handler: F)
+    where
+        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
+    {
+        self.router.put(path, handler);
+    }
+
+    /// Register a handler for PATCH requests.
+    pub fn patch<F, Fut>(&mut self, path: &str, handler: F)
+    where
+        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
+    {
+        self.router.patch(path, handler);
+    }
+
+    /// Register a handler for DELETE requests.
+    pub fn delete<F, Fut>(&mut self, path: &str, handler: F)
+    where
+        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
+    {
+        self.router.delete(path, handler);
+    }
+
+    /// Register a handler for OPTIONS requests.
+    pub fn options<F, Fut>(&mut self, path: &str, handler: F)
+    where
+        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
+    {
+        self.router.options(path, handler);
+    }
+
+    /// Register a handler for HEAD requests.
+    pub fn head<F, Fut>(&mut self, path: &str, handler: F)
+    where
+        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
+    {
+        self.router.head(path, handler);
+    }
+
+    /// Register a handler for all HTTP methods.
+    pub fn all<F, Fut>(&mut self, path: &str, handler: F)
+    where
+        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
+    {
+        self.router.all(path, handler);
+    }
+
+    /// Register middleware that matches all paths and methods.
+    pub fn r#use<F, Fut>(&mut self, handler: F)
+    where
+        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
+    {
+        self.router.r#use(handler);
+    }
+
+    /// Register middleware that matches a path prefix and all methods.
+    pub fn use_with_path<F, Fut>(&mut self, path: &str, handler: F)
+    where
+        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
+    {
+        self.router.use_with_path(path, handler);
     }
 
     /// Start the server on the given port.
     ///
     /// Runs indefinitely until the process is killed.
-    pub async fn listen(self, port: u16) -> Result<(), Error> {
+    pub async fn listen(mut self, port: u16) -> Result<(), Error> {
+        self.server.set_router(self.router);
         self.server.listen(port).await
     }
 }

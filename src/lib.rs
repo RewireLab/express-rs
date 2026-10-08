@@ -4,14 +4,16 @@
 //! It is an independent implementation inspired by Express.js, not an
 //! official project.
 //!
-//! # Phase 1: HTTP Foundation
+//! # Phase 2: Application + Routing
 //!
-//! The current implementation provides the HTTP foundation:
-//! - TCP server with HTTP/1.1 support
+//! The current implementation provides:
+//! - TCP server with HTTP/1.1 support (via hyper)
 //! - Request parsing: method, path, headers, body, query parameters
-//! - Response writing: status, headers, body
+//! - Response writing: status, headers, text, JSON
 //! - Keep-alive connections
-//! - Basic async request processing
+//! - Async request processing
+//! - Routing: `app.get()`, `app.post()`, etc.
+//! - Middleware: `app.use()` with `next()` support
 //!
 //! # Example
 //!
@@ -22,7 +24,7 @@
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let mut app = App::new();
 //!
-//!     app.handler(|_req, mut res| async move {
+//!     app.get("/", |_req, mut res, _next| async move {
 //!         res.status(200).text("Hello, World!");
 //!         res
 //!     });
@@ -36,6 +38,7 @@ pub mod app;
 pub mod error;
 pub mod request;
 pub mod response;
+pub mod router;
 pub mod server;
 
 pub use app::App;
