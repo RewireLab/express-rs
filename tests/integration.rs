@@ -69,7 +69,7 @@ async fn test_basic_get_request() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.status(200).send("Hello, World!");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -97,7 +97,7 @@ async fn test_custom_status_code() {
     let port = start_server(|app| {
         app.get("/missing", |_req, mut res, _next, _params| async move {
             res.status(404).send("Not Found");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -122,7 +122,7 @@ async fn test_custom_headers() {
             res.set("X-Custom", "test-value")
                 .set("X-Another", "another-value")
                 .send("OK");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -146,7 +146,7 @@ async fn test_post_with_body() {
         app.post("/submit", |req, mut res, _next, _params| async move {
             let body = req.body_text();
             res.send(&format!("Received: {}", body));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -171,7 +171,7 @@ async fn test_query_parameters() {
             let name = req.query_param("name").unwrap_or("unknown");
             let count = req.query_param("count").unwrap_or("0");
             res.send(&format!("name={}, count={}", name, count));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -195,7 +195,7 @@ async fn test_query_with_encoding() {
         app.get("/search", |req, mut res, _next, _params| async move {
             let q = req.query_param("q").unwrap_or("");
             res.send(&format!("q={}", q));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -213,7 +213,7 @@ async fn test_multiple_sequential_requests() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.send("OK");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -234,7 +234,7 @@ async fn test_keep_alive() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.send("OK");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -288,7 +288,7 @@ async fn test_empty_body() {
         app.post("/", |req, mut res, _next, _params| async move {
             let body = req.body_text();
             res.send(&format!("Body length: {}", body.len()));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -307,7 +307,7 @@ async fn test_large_body() {
         app.post("/", |req, mut res, _next, _params| async move {
             let body = req.body_text();
             res.send(&format!("Body length: {}", body.len()));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -327,7 +327,7 @@ async fn test_json_response() {
         app.get("/api/data", |_req, mut res, _next, _params| async move {
             res.status(200)
                 .json_str(r#"{"message":"hello","count":42}"#);
-            res
+            Ok(res)
         });
     })
     .await;
@@ -355,7 +355,7 @@ async fn test_concurrent_requests() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.send("OK");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -383,7 +383,7 @@ async fn test_malformed_request_does_not_crash_server() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.send("Still alive");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -417,19 +417,19 @@ async fn test_routing_different_methods() {
     let port = start_server(|app| {
         app.get("/resource", |_req, mut res, _next, _params| async move {
             res.send("GET");
-            res
+            Ok(res)
         });
         app.post("/resource", |_req, mut res, _next, _params| async move {
             res.send("POST");
-            res
+            Ok(res)
         });
         app.put("/resource", |_req, mut res, _next, _params| async move {
             res.send("PUT");
-            res
+            Ok(res)
         });
         app.delete("/resource", |_req, mut res, _next, _params| async move {
             res.send("DELETE");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -453,7 +453,7 @@ async fn test_routing_method_not_allowed() {
     let port = start_server(|app| {
         app.get("/resource", |_req, mut res, _next, _params| async move {
             res.send("GET");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -472,15 +472,15 @@ async fn test_routing_different_paths() {
     let port = start_server(|app| {
         app.get("/users", |_req, mut res, _next, _params| async move {
             res.send("users list");
-            res
+            Ok(res)
         });
         app.get("/users/123", |_req, mut res, _next, _params| async move {
             res.send("user 123");
-            res
+            Ok(res)
         });
         app.get("/posts", |_req, mut res, _next, _params| async move {
             res.send("posts list");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -502,11 +502,11 @@ async fn test_middleware_use_all_paths() {
         app.r#use(|_req, mut res, next, _params| async move {
             res.set("X-Middleware", "hit");
             next(express_rs::router::NextCall::Continue).await;
-            res
+            Ok(res)
         });
         app.get("/", |_req, mut res, _next, _params| async move {
             res.send("OK");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -526,15 +526,15 @@ async fn test_middleware_use_path_prefix() {
         app.use_with_path("/api", |_req, mut res, next, _params| async move {
             res.set("X-API", "true");
             next(express_rs::router::NextCall::Continue).await;
-            res
+            Ok(res)
         });
         app.get("/api/users", |_req, mut res, _next, _params| async move {
             res.send("users");
-            res
+            Ok(res)
         });
         app.get("/other", |_req, mut res, _next, _params| async move {
             res.send("other");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -570,16 +570,16 @@ async fn test_next_continues_to_next_middleware() {
         app.r#use(|_req, mut res, next, _params| async move {
             res.set("X-First", "1");
             next(express_rs::router::NextCall::Continue).await;
-            res
+            Ok(res)
         });
         app.r#use(|_req, mut res, next, _params| async move {
             res.set("X-Second", "2");
             next(express_rs::router::NextCall::Continue).await;
-            res
+            Ok(res)
         });
         app.get("/", |_req, mut res, _next, _params| async move {
             res.send("done");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -608,11 +608,11 @@ async fn test_no_next_stops_processing() {
         app.r#use(|_req, mut res, _next, _params| async move {
             res.set("X-Blocked", "true");
             res.send("blocked");
-            res
+            Ok(res)
         });
         app.get("/", |_req, mut res, _next, _params| async move {
             res.send("should not reach");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -640,7 +640,7 @@ async fn test_trailing_slash_optional() {
     let port = start_server(|app| {
         app.get("/users", |_req, mut res, _next, _params| async move {
             res.send("users");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -657,7 +657,7 @@ async fn test_app_all_matches_all_methods() {
     let port = start_server(|app| {
         app.all("/resource", |_req, mut res, _next, _params| async move {
             res.send("any method");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -678,11 +678,11 @@ async fn test_route_ordering_first_match_wins() {
     let port = start_server(|app| {
         app.get("/resource", |_req, mut res, _next, _params| async move {
             res.send("first");
-            res
+            Ok(res)
         });
         app.get("/resource", |_req, mut res, _next, _params| async move {
             res.send("second");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -706,12 +706,12 @@ async fn test_middleware_runs_before_route_handler() {
         app.r#use(|_req, mut res, next, _params| async move {
             res.set("X-Before", "true");
             next(express_rs::router::NextCall::Continue).await;
-            res
+            Ok(res)
         });
         app.get("/", |_req, mut res, _next, _params| async move {
             res.set("X-Handler", "true");
             res.send("OK");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -734,7 +734,7 @@ async fn test_head_request() {
     let port = start_server(|app| {
         app.get("/resource", |_req, mut res, _next, _params| async move {
             res.send("body");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -753,11 +753,11 @@ async fn test_middleware_can_modify_response() {
         app.r#use(|_req, mut res, next, _params| async move {
             next(express_rs::router::NextCall::Continue).await;
             res.set("X-After", "true");
-            res
+            Ok(res)
         });
         app.get("/", |_req, mut res, _next, _params| async move {
             res.send("OK");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -777,17 +777,17 @@ async fn test_multiple_middleware_and_route() {
         app.r#use(|_req, mut res, next, _params| async move {
             res.set("X-M1", "1");
             next(express_rs::router::NextCall::Continue).await;
-            res
+            Ok(res)
         });
         app.r#use(|_req, mut res, next, _params| async move {
             res.set("X-M2", "2");
             next(express_rs::router::NextCall::Continue).await;
-            res
+            Ok(res)
         });
         app.get("/", |_req, mut res, _next, _params| async move {
             res.set("X-Handler", "H");
             res.send("OK");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -821,7 +821,7 @@ async fn test_route_param_basic() {
         app.get("/user/:id", |_req, mut res, _next, params| async move {
             let id = params.get("id").map_or("", |v| v);
             res.send(&format!("user {}", id));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -843,7 +843,7 @@ async fn test_route_param_multiple() {
                 let user = params.get("userId").map_or("", |v| v);
                 let post = params.get("postId").map_or("", |v| v);
                 res.send(&format!("user={} post={}", user, post));
-                res
+                Ok(res)
             },
         );
     })
@@ -868,7 +868,7 @@ async fn test_route_param_single_segment_only() {
         app.get("/user/:id", |_req, mut res, _next, params| async move {
             let id = params.get("id").map_or("", |v| v);
             res.send(&format!("user {}", id));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -890,7 +890,7 @@ async fn test_route_param_with_static_prefix() {
             |_req, mut res, _next, params| async move {
                 let id = params.get("id").map_or("", |v| v);
                 res.send(&format!("api user {}", id));
-                res
+                Ok(res)
             },
         );
     })
@@ -910,7 +910,7 @@ async fn test_wildcard_splat() {
         app.get("/files/*splat", |_req, mut res, _next, params| async move {
             let splat = params.get("splat").map_or("", |v| v);
             res.send(&format!("files: {}", splat));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -929,7 +929,7 @@ async fn test_wildcard_single_segment() {
         app.get("/files/*splat", |_req, mut res, _next, params| async move {
             let splat = params.get("splat").map_or("", |v| v);
             res.send(&format!("files: {}", splat));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -951,7 +951,7 @@ async fn test_optional_param_present() {
                 let id = params.get("id").map_or("", |v| v);
                 let op = params.get("op").map_or("view", |v| v);
                 res.send(&format!("{} {}", op, id));
-                res
+                Ok(res)
             },
         );
     })
@@ -974,7 +974,7 @@ async fn test_optional_param_absent() {
                 let id = params.get("id").map_or("", |v| v);
                 let op = params.get("op").map_or("view", |v| v);
                 res.send(&format!("{} {}", op, id));
-                res
+                Ok(res)
             },
         );
     })
@@ -994,11 +994,11 @@ async fn test_next_route_skips_to_next_route() {
         app.get("/resource", |_req, mut res, next, _params| async move {
             res.set("X-First", "1");
             next(express_rs::router::NextCall::Route).await;
-            res
+            Ok(res)
         });
         app.get("/resource", |_req, mut res, _next, _params| async move {
             res.send("second");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1022,12 +1022,12 @@ async fn test_param_with_middleware() {
         app.r#use(|_req, mut res, next, _params| async move {
             res.set("X-Middleware", "true");
             next(express_rs::router::NextCall::Continue).await;
-            res
+            Ok(res)
         });
         app.get("/user/:id", |_req, mut res, _next, params| async move {
             let id = params.get("id").map_or("", |v| v);
             res.send(&format!("user {}", id));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1051,7 +1051,7 @@ async fn test_param_decoding() {
         app.get("/user/:name", |_req, mut res, _next, params| async move {
             let name = params.get("name").map_or("", |v| v);
             res.send(&format!("user {}", name));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1073,7 +1073,7 @@ async fn test_dot_delimiter_in_path() {
                 let name = params.get("name").map_or("", |v| v);
                 let format = params.get("format").map_or("none", |v| v);
                 res.send(&format!("{} as {}", name, format));
-                res
+                Ok(res)
             },
         );
     })
@@ -1096,7 +1096,7 @@ async fn test_optional_format_suffix() {
                 let name = params.get("name").map_or("", |v| v);
                 let format = params.get("format").map_or("html", |v| v);
                 res.send(&format!("{} as {}", name, format));
-                res
+                Ok(res)
             },
         );
     })
@@ -1126,7 +1126,7 @@ async fn test_escaped_literals_in_path() {
                 let user = params.get("user").map_or("", |v| v);
                 let op = params.get("op").map_or("", |v| v);
                 res.send(&format!("{} {}", op, user));
-                res
+                Ok(res)
             },
         );
     })
@@ -1148,7 +1148,7 @@ async fn test_param_adjacent_to_static_text() {
             |_req, mut res, _next, params| async move {
                 let version = params.get("version").map_or("", |v| v);
                 res.send(&format!("v{}", version));
-                res
+                Ok(res)
             },
         );
     })
@@ -1168,7 +1168,7 @@ async fn test_wildcard_captures_multiple_segments() {
         app.get("/files/*splat", |_req, mut res, _next, params| async move {
             let splat = params.get("splat").map_or("", |v| v);
             res.send(splat);
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1187,7 +1187,7 @@ async fn test_query_string_is_not_part_of_the_path() {
         app.get("/users/:id", |_req, mut res, _next, params| async move {
             let id = params.get("id").map_or("", |v| v);
             res.send(&format!("user {}", id));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1210,7 +1210,7 @@ async fn test_send_defaults_to_text_html() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.send("<p>hi</p>");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1234,7 +1234,7 @@ async fn test_send_keeps_existing_content_type() {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.set("content-type", "application/xml");
             res.send("<a/>");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1253,7 +1253,7 @@ async fn test_json_serializes_a_typed_value() {
         app.get("/", |_req, mut res, _next, _params| async move {
             let data = serde_json::json!({"name": "tj", "roles": ["admin"]});
             res.json(&data);
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1276,7 +1276,7 @@ async fn test_send_status_sends_reason_phrase() {
     let port = start_server(|app| {
         app.get("/gone", |_req, mut res, _next, _params| async move {
             res.send_status(410);
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1299,7 +1299,7 @@ async fn test_content_type_resolves_extension() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.content_type("json").send("{}");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1317,7 +1317,7 @@ async fn test_javascript_is_text_javascript() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.content_type("js").send("1");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1335,7 +1335,7 @@ async fn test_set_normalises_content_type_charset() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.set("content-type", "text/html").send("x");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1355,7 +1355,7 @@ async fn test_get_reads_a_header_back() {
             let host = req.header("host").unwrap_or("none").to_string();
             res.set("x-seen-host", &host);
             res.send("ok");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1375,7 +1375,7 @@ async fn test_append_joins_values() {
             res.set("link", "<http://a>");
             res.append("link", "<http://b>");
             res.send("ok");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1394,7 +1394,7 @@ async fn test_vary_appends_once() {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.vary("Accept").vary("accept").vary("Accept-Encoding");
             res.send("ok");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1412,7 +1412,7 @@ async fn test_redirect_sets_location_and_defaults_to_302() {
     let port = start_server(|app| {
         app.get("/old", |_req, mut res, _next, _params| async move {
             res.redirect(302, "/new");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1436,7 +1436,7 @@ async fn test_redirect_negotiates_html_for_browsers() {
     let port = start_server(|app| {
         app.get("/old", |_req, mut res, _next, _params| async move {
             res.redirect(301, "/new");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1472,7 +1472,7 @@ async fn test_redirect_defaults_when_no_accept_header_is_meaningful() {
     let port = start_server(|app| {
         app.get("/x", |_req, mut res, _next, _params| async move {
             res.redirect(307, "/y");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1488,7 +1488,7 @@ async fn test_location_encodes_the_url() {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.location("/my file");
             res.send("ok");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1506,7 +1506,7 @@ async fn test_send_sets_content_length() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.send("hello");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1524,7 +1524,7 @@ async fn test_send_generates_a_weak_etag() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.send("hello");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1542,7 +1542,7 @@ async fn test_conditional_request_returns_304() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.send("hello");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1590,7 +1590,7 @@ async fn test_head_request_has_headers_but_no_body() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.send("hello");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1619,7 +1619,7 @@ async fn test_204_strips_content_headers() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
             res.status(204).send("");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1640,11 +1640,11 @@ async fn test_request_accepts_negotiates() {
             match req.accepts(&["json", "html"]) {
                 Some(kind) => {
                     res.send(&format!("chosen: {}", kind));
-                    res
+                    Ok(res)
                 }
                 None => {
                     res.status(406).send("not acceptable");
-                    res
+                    Ok(res)
                 }
             }
         });
@@ -1684,7 +1684,7 @@ async fn test_request_accepts_returns_406_when_nothing_matches() {
                 res.status(406);
             }
             res.send("done");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1721,7 +1721,7 @@ async fn test_request_host_and_hostname() {
                 req.host().unwrap_or("?"),
                 req.hostname().unwrap_or("?")
             ));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1758,7 +1758,7 @@ async fn test_request_xhr_and_is() {
             let xhr = req.xhr();
             let json = req.is(&["json"]).is_some();
             res.send(&format!("xhr={} json={}", xhr, json));
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1799,7 +1799,7 @@ async fn test_status_out_of_range_is_ignored() {
             res.status(99);
             res.status(200);
             res.send("ok");
-            res
+            Ok(res)
         });
     })
     .await;
@@ -1808,6 +1808,563 @@ async fn test_status_out_of_range_is_ignored() {
     assert!(
         response.contains("200 OK"),
         "Expected 200, got: {}",
+        response
+    );
+}
+
+// ============================================================
+// Phase 6: Error Middleware Tests
+// ============================================================
+
+#[tokio::test]
+async fn test_next_err_reaches_error_handler() {
+    let port = start_server(|app| {
+        app.get("/boom", |_req, _res, next, _params| async move {
+            next(express_rs::router::NextCall::Error(express_rs::Error::new(
+                "boom",
+            )))
+            .await;
+            Ok(express_rs::Response::new())
+        });
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.send(&format!("handled: {}", err.message()));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/boom", None).await;
+    assert!(
+        response.contains("handled: boom"),
+        "Expected error handler, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_async_handler_returning_err_is_forwarded() {
+    let port = start_server(|app| {
+        app.get("/fail", |_req, _res, _next, _params| async move {
+            // Express 5 forwards a rejected promise here.
+            Err(express_rs::Error::new("async failure"))
+        });
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.send(&format!("caught: {}", err.message()));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/fail", None).await;
+    assert!(
+        response.contains("caught: async failure"),
+        "Expected caught error, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_error_skips_route_layers() {
+    let port = start_server(|app| {
+        // The erroring route.
+        app.get("/x", |_req, _res, next, _params| async move {
+            next(express_rs::router::NextCall::Error(express_rs::Error::new(
+                "fail",
+            )))
+            .await;
+            Ok(express_rs::Response::new())
+        });
+        // A later route for the same path must NOT run while the error is
+        // pending — Express skips every route layer once an error exists.
+        app.get("/x", |_req, mut res, _next, _params| async move {
+            res.send("second route should not run");
+            Ok(res)
+        });
+        app.use_error_handler(|_err, _req, mut res, _next, _params| async move {
+            res.send("error middleware");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/x", None).await;
+    assert!(
+        response.contains("error middleware"),
+        "Expected error handler, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("second route should not run"),
+        "A route must not run while an error is pending, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_plain_middleware_is_skipped_while_error_pending() {
+    let port = start_server(|app| {
+        app.get("/e", |_req, _res, next, _params| async move {
+            next(express_rs::router::NextCall::Error(express_rs::Error::new(
+                "nope",
+            )))
+            .await;
+            Ok(express_rs::Response::new())
+        });
+        // Ordinary middleware registered after the error must be skipped.
+        app.r#use(|_req, mut res, next, _params| async move {
+            next(express_rs::router::NextCall::Continue).await;
+            res.send("ordinary middleware ran");
+            Ok(res)
+        });
+        app.use_error_handler(|_err, _req, mut res, _next, _params| async move {
+            res.send("error handler");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/e", None).await;
+    assert!(
+        response.contains("error handler"),
+        "Expected error handler, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("ordinary middleware ran"),
+        "Ordinary middleware must not run while an error is pending, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_error_handler_only_runs_with_a_pending_error() {
+    let port = start_server(|app| {
+        // An error handler registered before any error must not run for a
+        // normal request.
+        app.use_error_handler(|_err, _req, mut res, _next, _params| async move {
+            res.send("error handler ran unexpectedly");
+            Ok(res)
+        });
+        app.get("/ok", |_req, mut res, _next, _params| async move {
+            res.send("normal");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/ok", None).await;
+    assert!(
+        response.contains("normal"),
+        "Expected normal handler, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("error handler ran unexpectedly"),
+        "Error handler must not run without an error, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_unhandled_error_becomes_500() {
+    let port = start_server(|app| {
+        app.get("/oops", |_req, _res, _next, _params| async move {
+            Err(express_rs::Error::new("kaboom"))
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/oops", None).await;
+    assert!(response.contains("500"), "Expected 500, got: {}", response);
+    assert!(
+        response.contains("kaboom"),
+        "Expected the message, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_error_status_is_honoured() {
+    let port = start_server(|app| {
+        app.get("/missing", |_req, _res, _next, _params| async move {
+            Err(express_rs::Error::with_status(404, "not here"))
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/missing", None).await;
+    assert!(response.contains("404"), "Expected 404, got: {}", response);
+    assert!(
+        response.contains("not here"),
+        "Expected the message, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_headers_set_before_next_err_persist() {
+    let port = start_server(|app| {
+        app.get("/x", |_req, mut res, next, _params| async move {
+            // Express keeps a single res object for the whole request, so
+            // headers set before an error survive into the error handler.
+            res.set("x-partial", "true");
+            next(express_rs::router::NextCall::Error(express_rs::Error::new(
+                "partial",
+            )))
+            .await;
+            Ok(res)
+        });
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.send(&err.message());
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/x", None).await;
+    assert!(
+        response.contains("partial"),
+        "Expected the message, got: {}",
+        response
+    );
+    assert!(
+        response.contains("x-partial: true"),
+        "Headers set before next(err) should persist, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_returning_err_loses_headers_set_before_it() {
+    let port = start_server(|app| {
+        app.get("/x", |_req, mut res, _next, _params| async move {
+            // The ownership model forces choosing between a response and an
+            // error, so anything set before the Err is dropped. This is the
+            // documented divergence from Express, where res is one object.
+            res.set("x-partial", "true");
+            Err(express_rs::Error::new("dropped"))
+        });
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.send(&err.message());
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/x", None).await;
+    assert!(
+        response.contains("dropped"),
+        "Expected the message, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("x-partial"),
+        "Returning Err drops the half-built response, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_error_handler_can_resume_with_next() {
+    let port = start_server(|app| {
+        app.get("/x", |_req, _res, next, _params| async move {
+            next(express_rs::router::NextCall::Error(express_rs::Error::new(
+                "recoverable",
+            )))
+            .await;
+            Ok(express_rs::Response::new())
+        });
+        // Swallow the error and continue normal dispatch.
+        app.use_error_handler(|_err, _req, _res, next, _params| async move {
+            next(express_rs::router::NextCall::Continue).await;
+            Ok(express_rs::Response::new())
+        });
+        app.r#use(|_req, mut res, next, _params| async move {
+            next(express_rs::router::NextCall::Continue).await;
+            res.send("recovered");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/x", None).await;
+    assert!(
+        response.contains("recovered"),
+        "Expected recovery, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_failing_error_handler_propagates_to_500() {
+    let port = start_server(|app| {
+        app.get("/x", |_req, _res, _next, _params| async move {
+            Err(express_rs::Error::new("first"))
+        });
+        // This error handler fails too, so nothing handles it.
+        app.use_error_handler(|_err, _req, _res, _next, _params| async move {
+            Err(express_rs::Error::new("second"))
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/x", None).await;
+    assert!(response.contains("500"), "Expected 500, got: {}", response);
+    assert!(
+        response.contains("second"),
+        "Expected the propagated message, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_first_error_handler_wins() {
+    let port = start_server(|app| {
+        app.get("/x", |_req, _res, next, _params| async move {
+            next(express_rs::router::NextCall::Error(express_rs::Error::new(
+                "e",
+            )))
+            .await;
+            Ok(express_rs::Response::new())
+        });
+        app.use_error_handler(|_err, _req, mut res, _next, _params| async move {
+            res.send("first");
+            Ok(res)
+        });
+        app.use_error_handler(|_err, _req, mut res, _next, _params| async move {
+            res.send("second");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/x", None).await;
+    assert!(
+        response.contains("first"),
+        "Expected the first error handler, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("second"),
+        "Second must not run, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_error_body_is_text_plain_with_hardening_headers() {
+    let port = start_server(|app| {
+        app.get("/x", |_req, _res, _next, _params| async move {
+            Err(express_rs::Error::new("bad"))
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/x", None).await;
+    assert!(
+        response.contains("text/plain"),
+        "Expected text/plain, got: {}",
+        response
+    );
+    assert!(
+        response.contains("x-content-type-options: nosniff"),
+        "Expected nosniff, got: {}",
+        response
+    );
+    assert!(
+        response.contains("content-security-policy"),
+        "Expected a CSP header, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_head_on_unhandled_error_keeps_headers_only() {
+    let port = start_server(|app| {
+        app.get("/x", |_req, _res, _next, _params| async move {
+            Err(express_rs::Error::new("hidden"))
+        });
+    })
+    .await;
+
+    let response = request(port, "HEAD", "/x", None).await;
+    assert!(response.contains("500"), "Expected 500, got: {}", response);
+    assert!(
+        !response.contains("hidden"),
+        "HEAD must not send the error body, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_error_in_middleware_reaches_error_handler() {
+    let port = start_server(|app| {
+        app.r#use(|_req, _res, _next, _params| async move {
+            Err(express_rs::Error::new("middleware failure"))
+        });
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.send("never");
+            Ok(res)
+        });
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.send(&format!("from middleware: {}", err.message()));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("from middleware: middleware failure"),
+        "Expected the middleware error, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_next_route_still_works_with_error_handling() {
+    let port = start_server(|app| {
+        app.get("/r", |_req, mut res, next, _params| async move {
+            res.set("x-first", "1");
+            next(express_rs::router::NextCall::Route).await;
+            Ok(res)
+        });
+        app.get("/r", |_req, mut res, _next, _params| async move {
+            res.send("second route");
+            Ok(res)
+        });
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.send(&format!("error: {}", err.message()));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/r", None).await;
+    assert!(
+        response.contains("x-first: 1"),
+        "Expected the first route header, got: {}",
+        response
+    );
+    assert!(
+        response.contains("second route"),
+        "Expected the second route, got: {}",
+        response
+    );
+}
+
+// ============================================================
+// Phase 6: ports of Express's app.router.js error scenarios
+// ============================================================
+
+/// Mirrors Express's "should break out of app.router" test: an error in
+/// one route skips every later route layer and is caught by middleware.
+#[tokio::test]
+async fn test_error_breaks_out_of_the_router() {
+    let port = start_server(|app| {
+        app.get("/foo{/:bar}", |_req, _res, next, _params| async move {
+            next(express_rs::router::NextCall::Continue).await;
+            Ok(express_rs::Response::new())
+        });
+        // Never matches /foo, and must not run even if it did.
+        app.get("/bar", |_req, mut res, _next, _params| async move {
+            res.send("wrong");
+            Ok(res)
+        });
+        app.get("/foo", |_req, _res, next, _params| async move {
+            next(express_rs::router::NextCall::Error(express_rs::Error::new(
+                "fail",
+            )))
+            .await;
+            Ok(express_rs::Response::new())
+        });
+        // A later /foo route must be skipped while the error is pending.
+        app.get("/foo", |_req, mut res, _next, _params| async move {
+            res.send("must not run");
+            Ok(res)
+        });
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.set("content-type", "application/json");
+            res.send(&format!("{{\"error\":\"{}\"}}", err.message()));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/foo", None).await;
+    assert!(
+        response.contains(r#"{"error":"fail"}"#),
+        "Expected the error JSON, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("must not run"),
+        "A route after the erroring route must be skipped, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("wrong"),
+        "An unrelated route must not run, got: {}",
+        response
+    );
+}
+
+/// Mirrors Express's "should call handler in same route, if exists".
+///
+/// Express supports this because one route holds a stack of handlers and
+/// its own dispatch runs error handlers registered alongside them.
+/// express-rs registers one handler per route layer, so this scenario is
+/// spelled with ordinary middleware instead — the observable result for an
+/// error raised mid-chain is the same.
+#[tokio::test]
+async fn test_error_handler_downstream_of_the_failing_one_runs() {
+    let port = start_server(|app| {
+        app.get("/foo", |_req, _res, next, _params| async move {
+            next(express_rs::router::NextCall::Error(express_rs::Error::new(
+                "boom!",
+            )))
+            .await;
+            Ok(express_rs::Response::new())
+        });
+        app.r#use(|_req, _res, next, _params| async move {
+            // Ordinary middleware, skipped while the error is pending.
+            next(express_rs::router::NextCall::Continue).await;
+            Ok(express_rs::Response::new())
+        });
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.send(&format!("route go {}", err.message()));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/foo", None).await;
+    assert!(
+        response.contains("route go boom!"),
+        "Expected the downstream error handler, got: {}",
+        response
+    );
+}
+
+/// Express 5 forwards a rejected promise to error middleware. A handler
+/// returning `Err` is the Rust equivalent.
+#[tokio::test]
+async fn test_rejected_promise_equivalent_is_forwarded() {
+    let port = start_server(|app| {
+        app.get("/", |_req, _res, _next, _params| async move {
+            Err(express_rs::Error::new("boom!"))
+        });
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.send(&format!("saw {}: {}", "Error", err.message()));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("saw Error: boom!"),
+        "Expected the rejected value forwarded, got: {}",
         response
     );
 }

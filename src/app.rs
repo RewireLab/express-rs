@@ -1,14 +1,13 @@
 //! Application abstraction.
 //!
 //! The `App` is the main user-facing type. It provides an Express-like
-//! API for registering routes and middleware.
+//! API for registering routes, middleware, and error-handling middleware.
 
 use crate::error::Error;
 use crate::request::Request;
 use crate::response::Response;
-use crate::router::{Next, Router};
+use crate::router::{Next, Params, Router};
 use crate::server::Server;
-use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -25,7 +24,7 @@ use std::sync::Arc;
 ///
 ///     app.get("/", |_req, mut res, _next, _params| async move {
 ///         res.status(200).send("Hello, World!");
-///         res
+///         Ok(res)
 ///     });
 ///
 ///     app.listen(3000).await?;
@@ -59,8 +58,8 @@ impl App {
     /// Register a handler for GET requests.
     pub fn get<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Response> + Send + 'static,
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
     {
         self.router.get(path, handler);
     }
@@ -68,8 +67,8 @@ impl App {
     /// Register a handler for POST requests.
     pub fn post<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Response> + Send + 'static,
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
     {
         self.router.post(path, handler);
     }
@@ -77,8 +76,8 @@ impl App {
     /// Register a handler for PUT requests.
     pub fn put<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Response> + Send + 'static,
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
     {
         self.router.put(path, handler);
     }
@@ -86,8 +85,8 @@ impl App {
     /// Register a handler for PATCH requests.
     pub fn patch<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Response> + Send + 'static,
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
     {
         self.router.patch(path, handler);
     }
@@ -95,8 +94,8 @@ impl App {
     /// Register a handler for DELETE requests.
     pub fn delete<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Response> + Send + 'static,
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
     {
         self.router.delete(path, handler);
     }
@@ -104,8 +103,8 @@ impl App {
     /// Register a handler for OPTIONS requests.
     pub fn options<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Response> + Send + 'static,
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
     {
         self.router.options(path, handler);
     }
@@ -113,8 +112,8 @@ impl App {
     /// Register a handler for HEAD requests.
     pub fn head<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Response> + Send + 'static,
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
     {
         self.router.head(path, handler);
     }
@@ -122,8 +121,8 @@ impl App {
     /// Register a handler for all HTTP methods.
     pub fn all<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Response> + Send + 'static,
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
     {
         self.router.all(path, handler);
     }
@@ -131,8 +130,8 @@ impl App {
     /// Register middleware that matches all paths and methods.
     pub fn r#use<F, Fut>(&mut self, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Response> + Send + 'static,
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
     {
         self.router.r#use(handler);
     }
@@ -140,10 +139,30 @@ impl App {
     /// Register middleware that matches a path prefix and all methods.
     pub fn use_with_path<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Response> + Send + 'static,
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
     {
         self.router.use_with_path(path, handler);
+    }
+
+    /// Register error-handling middleware.
+    ///
+    /// Takes the error as its first argument, which is what distinguishes
+    /// it from ordinary middleware — the same four-argument convention
+    /// Express uses, but enforced by the compiler.
+    ///
+    /// ```ignore
+    /// app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+    ///     res.status(err.status()).send(&err.message());
+    ///     Ok(res)
+    /// });
+    /// ```
+    pub fn use_error_handler<F, Fut>(&mut self, handler: F)
+    where
+        F: Fn(Error, Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.router.use_error_handler(handler);
     }
 
     /// Start the server on the given port.

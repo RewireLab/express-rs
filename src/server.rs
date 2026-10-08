@@ -45,9 +45,7 @@ impl Server {
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         let listener = TcpListener::bind(addr).await?;
 
-        let router = self
-            .router
-            .ok_or_else(|| Error::Custom("No router set".to_string()))?;
+        let router = self.router.ok_or_else(|| Error::new("No router set"))?;
 
         let router = Arc::new(router);
 

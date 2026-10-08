@@ -8,6 +8,7 @@
 //! it, and returns it. Borrowing a `&mut Response` across an `await` point
 //! is what this avoids.
 
+use crate::error::Error;
 use crate::etag;
 use crate::mime;
 use crate::request::Request;
@@ -358,6 +359,43 @@ impl Response {
     /// Get the response body.
     pub fn get_body(&self) -> Option<&Bytes> {
         self.body.as_ref()
+    }
+
+    /// Build the default response for an error nothing handled.
+    ///
+    /// Express's `finalhandler` honours `err.status`/`err.statusCode`,
+    /// sends the message as plain text, and adds the hardening headers
+    /// that keep a browser from rendering an error page as HTML.
+    pub(crate) fn internal_error(err: &Error, req: &Request) -> Self {
+        let mut res = Self::new();
+        res.status(err.status());
+
+        // Only 4xx and 5xx are honoured; anything else is a 500.
+        if !(400..600).contains(&err.status()) {
+            res.status(500);
+        }
+
+        res.headers.insert(
+            HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static("default-src 'none'"),
+        );
+        res.headers.insert(
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        );
+
+        let body = err.message();
+        res.set("content-type", "text/plain");
+        res.set("content-length", &body.len().to_string());
+        res.body = Some(Bytes::from(body));
+
+        // HEAD keeps the headers and drops the body.
+        if req.method() == http::Method::HEAD {
+            res.head_length = Some(res.body.as_ref().map(|b| b.len() as u64).unwrap_or(0));
+            res.body = None;
+        }
+
+        res
     }
 
     /// Convert to a hyper response for writing to the wire.
