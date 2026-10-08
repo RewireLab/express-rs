@@ -1,0 +1,24 @@
+[package]
+name = "express-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Express.js-style HTTP framework, rebuilt in Rust"
+license = "MIT"
+repository = "https://github.com/RewireLab/express-rs"
+keywords = ["http", "web", "framework", "express"]
+categories = ["web-programming::http-server"]
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "io-util", "time"] }
+
+[[bin]]
+name = "express-rs"
+path = "src/main.rs"
