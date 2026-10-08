@@ -4,199 +4,223 @@
 //! The router maintains a stack of layers and iterates through them
 //! in order, executing handlers for each matching layer.
 
+use crate::path::PathPattern;
 use crate::request::Request;
 use crate::response::Response;
 use http::Method;
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+/// The type of `next()` call.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NextCall {
+    /// Continue to the next handler/layer.
+    Continue,
+    /// Skip to the next route (Express's `next('route')`).
+    Route,
+}
+
 /// The `next` function passed to handlers.
-///
-/// When a handler calls `next()`, the router continues to the next
-/// matching layer. If `next()` is not called, the request stops at the
-/// current handler.
-pub type Next = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+pub type Next = Arc<dyn Fn(NextCall) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// A request handler with middleware support.
-///
-/// Takes a shared `Arc<Request>` (so the request can be shared across
-/// middleware, matching Express's behavior), ownership of `Response`,
-/// and a `Next` function. Returns the `Response`.
 pub type Handler = Arc<
-    dyn Fn(Arc<Request>, Response, Next) -> Pin<Box<dyn Future<Output = Response> + Send>>
+    dyn Fn(
+            Arc<Request>,
+            Response,
+            Next,
+            HashMap<String, String>,
+        ) -> Pin<Box<dyn Future<Output = Response> + Send>>
         + Send
         + Sync,
 >;
 
 /// A single layer in the router stack.
-///
-/// A layer matches a path (and optionally an HTTP method) and contains
-/// one or more handlers that are executed in order.
 struct Layer {
-    path: String,
+    pattern: PathPattern,
     method: Option<Method>,
     handlers: Vec<Handler>,
-}
-
-impl Layer {
-    /// Check if this layer matches the given request.
-    fn matches(&self, req: &Request) -> bool {
-        // Check HTTP method
-        if let Some(ref method) = self.method {
-            if method != req.method() {
-                return false;
-            }
-        }
-
-        // Check path
-        if self.method.is_some() {
-            // Route layer: exact match (with optional trailing slash)
-            let path = req.path();
-            self.path == path || self.path == path.trim_end_matches('/')
-        } else {
-            // Middleware layer: prefix match
-            req.path().starts_with(&self.path)
-        }
-    }
+    is_route: bool,
 }
 
 /// Router state shared across the dispatch loop.
 struct RouterState {
     idx: usize,
     next_called: bool,
+    skip_to_route: bool,
 }
 
 /// The router.
-///
-/// Maintains an ordered stack of layers and dispatches requests to
-/// the first matching layer's handlers.
 pub struct Router {
     stack: Vec<Layer>,
+    case_sensitive: bool,
+    strict: bool,
 }
 
 impl Router {
     /// Create a new empty router.
     pub fn new() -> Self {
-        Self { stack: Vec::new() }
+        Self {
+            stack: Vec::new(),
+            case_sensitive: false,
+            strict: false,
+        }
+    }
+
+    /// Create a new router with options.
+    pub fn with_options(case_sensitive: bool, strict: bool) -> Self {
+        Self {
+            stack: Vec::new(),
+            case_sensitive,
+            strict,
+        }
+    }
+
+    /// Enable case-sensitive routing.
+    pub fn set_case_sensitive(&mut self, enabled: bool) {
+        self.case_sensitive = enabled;
+    }
+
+    /// Enable strict routing (trailing slash matters).
+    pub fn set_strict(&mut self, enabled: bool) {
+        self.strict = enabled;
     }
 
     /// Register a handler for GET requests.
     pub fn get<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        self.add_layer(path, Some(Method::GET), handler);
+        self.add_route(path, Some(Method::GET), handler);
     }
 
     /// Register a handler for POST requests.
     pub fn post<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        self.add_layer(path, Some(Method::POST), handler);
+        self.add_route(path, Some(Method::POST), handler);
     }
 
     /// Register a handler for PUT requests.
     pub fn put<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        self.add_layer(path, Some(Method::PUT), handler);
+        self.add_route(path, Some(Method::PUT), handler);
     }
 
     /// Register a handler for PATCH requests.
     pub fn patch<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        self.add_layer(path, Some(Method::PATCH), handler);
+        self.add_route(path, Some(Method::PATCH), handler);
     }
 
     /// Register a handler for DELETE requests.
     pub fn delete<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        self.add_layer(path, Some(Method::DELETE), handler);
+        self.add_route(path, Some(Method::DELETE), handler);
     }
 
     /// Register a handler for OPTIONS requests.
     pub fn options<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        self.add_layer(path, Some(Method::OPTIONS), handler);
+        self.add_route(path, Some(Method::OPTIONS), handler);
     }
 
     /// Register a handler for HEAD requests.
     pub fn head<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        self.add_layer(path, Some(Method::HEAD), handler);
+        self.add_route(path, Some(Method::HEAD), handler);
     }
 
     /// Register a handler for all HTTP methods.
     pub fn all<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        self.add_layer(path, None, handler);
+        self.add_route(path, None, handler);
     }
 
     /// Register middleware that matches all paths and methods.
     pub fn r#use<F, Fut>(&mut self, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        self.add_layer("/", None, handler);
+        self.add_middleware("/", handler);
     }
 
     /// Register middleware that matches a path prefix and all methods.
     pub fn use_with_path<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        self.add_layer(path, None, handler);
+        self.add_middleware(path, handler);
     }
 
-    /// Add a layer to the stack.
-    fn add_layer<F, Fut>(&mut self, path: &str, method: Option<Method>, handler: F)
+    /// Add a route layer.
+    fn add_route<F, Fut>(&mut self, path: &str, method: Option<Method>, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        let handler: Handler = Arc::new(move |req, res, next| Box::pin(handler(req, res, next)));
+        let pattern = PathPattern::new(path, self.case_sensitive, self.strict);
+        let handler: Handler =
+            Arc::new(move |req, res, next, params| Box::pin(handler(req, res, next, params)));
 
         self.stack.push(Layer {
-            path: path.to_string(),
+            pattern,
             method,
             handlers: vec![handler],
+            is_route: true,
+        });
+    }
+
+    /// Add a middleware layer.
+    fn add_middleware<F, Fut>(&mut self, path: &str, handler: F)
+    where
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
+    {
+        let pattern = PathPattern::new(path, self.case_sensitive, self.strict);
+        let handler: Handler =
+            Arc::new(move |req, res, next, params| Box::pin(handler(req, res, next, params)));
+
+        self.stack.push(Layer {
+            pattern,
+            method: None,
+            handlers: vec![handler],
+            is_route: false,
         });
     }
 
     /// Dispatch a request through the router.
-    ///
-    /// Iterates through the layer stack in order. For each matching
-    /// layer, executes its handlers sequentially. If a handler calls
-    /// `next()`, processing continues to the next handler/layer. If
-    /// `next()` is not called, processing stops.
     pub async fn handle(&self, req: Request, res: Response) -> Response {
         let req = Arc::new(req);
         let state = Arc::new(Mutex::new(RouterState {
             idx: 0,
             next_called: true,
+            skip_to_route: false,
         }));
         let mut res = res;
 
@@ -214,30 +238,67 @@ impl Router {
 
             let layer = &self.stack[layer_idx];
 
-            // Skip non-matching layers — reset next_called so the loop
-            // can continue scanning for the next matching layer.
-            if !layer.matches(&req) {
-                state.lock().unwrap().next_called = true;
-                continue;
+            // Handle next('route') — skip to next route layer
+            if state.lock().unwrap().skip_to_route {
+                state.lock().unwrap().skip_to_route = false;
+                if !layer.is_route {
+                    continue;
+                }
             }
 
-            // Execute handlers in this layer.
-            // Reset next_called before running handlers so we can
-            // detect whether any of them calls next().
+            // Match path and extract params
+            let params = if layer.method.is_some() {
+                // Route layer: exact match (tolerating a trailing slash)
+                match layer.pattern.match_path(req.path()) {
+                    Some(p) => p,
+                    None => {
+                        state.lock().unwrap().next_called = true;
+                        continue;
+                    }
+                }
+            } else {
+                // Middleware layer: prefix match, extra segments allowed
+                match layer.pattern.match_prefix(req.path()) {
+                    Some(p) => p,
+                    None => {
+                        state.lock().unwrap().next_called = true;
+                        continue;
+                    }
+                }
+            };
+
+            // Check HTTP method for route layers
+            if let Some(ref method) = layer.method {
+                if method != req.method() {
+                    state.lock().unwrap().next_called = true;
+                    continue;
+                }
+            }
+
+            // Execute handlers
             state.lock().unwrap().next_called = false;
 
             for handler in &layer.handlers {
                 let state_clone = state.clone();
                 let req_clone = req.clone();
+                let params_clone = params.clone();
 
-                let next: Next = Arc::new(move || {
+                let next: Next = Arc::new(move |call_type| {
                     let state = state_clone.clone();
                     Box::pin(async move {
-                        state.lock().unwrap().next_called = true;
+                        match call_type {
+                            NextCall::Continue => {
+                                state.lock().unwrap().next_called = true;
+                            }
+                            NextCall::Route => {
+                                state.lock().unwrap().next_called = true;
+                                state.lock().unwrap().skip_to_route = true;
+                            }
+                        }
                     })
                 });
 
-                res = handler(req_clone, res, next).await;
+                res = handler(req_clone, res, next, params_clone).await;
             }
         }
     }

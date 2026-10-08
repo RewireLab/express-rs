@@ -4,7 +4,7 @@ use express_rs::App;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new();
 
-    app.get("/", |_req, mut res, _next| async move {
+    app.get("/", |_req, mut res, _next, _params| async move {
         res.status(200).text("Hello from express-rs!");
         res
     });

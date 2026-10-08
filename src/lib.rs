@@ -14,6 +14,7 @@
 //! - Async request processing
 //! - Routing: `app.get()`, `app.post()`, etc.
 //! - Middleware: `app.use()` with `next()` support
+//! - Route parameters (`:id`) and wildcards (`*splat`)
 //!
 //! # Example
 //!
@@ -24,7 +25,7 @@
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let mut app = App::new();
 //!
-//!     app.get("/", |_req, mut res, _next| async move {
+//!     app.get("/", |_req, mut res, _next, _params| async move {
 //!         res.status(200).text("Hello, World!");
 //!         res
 //!     });
@@ -36,6 +37,7 @@
 
 pub mod app;
 pub mod error;
+pub mod path;
 pub mod request;
 pub mod response;
 pub mod router;

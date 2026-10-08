@@ -8,6 +8,7 @@ use crate::request::Request;
 use crate::response::Response;
 use crate::router::{Next, Router};
 use crate::server::Server;
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -22,7 +23,7 @@ use std::sync::Arc;
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let mut app = App::new();
 ///
-///     app.get("/", |_req, mut res, _next| async move {
+///     app.get("/", |_req, mut res, _next, _params| async move {
 ///         res.status(200).text("Hello, World!");
 ///         res
 ///     });
@@ -45,10 +46,20 @@ impl App {
         }
     }
 
+    /// Enable case-sensitive routing.
+    pub fn case_sensitive(&mut self) {
+        self.router.set_case_sensitive(true);
+    }
+
+    /// Enable strict routing (trailing slash matters).
+    pub fn strict(&mut self) {
+        self.router.set_strict(true);
+    }
+
     /// Register a handler for GET requests.
     pub fn get<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
         self.router.get(path, handler);
@@ -57,7 +68,7 @@ impl App {
     /// Register a handler for POST requests.
     pub fn post<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
         self.router.post(path, handler);
@@ -66,7 +77,7 @@ impl App {
     /// Register a handler for PUT requests.
     pub fn put<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
         self.router.put(path, handler);
@@ -75,7 +86,7 @@ impl App {
     /// Register a handler for PATCH requests.
     pub fn patch<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
         self.router.patch(path, handler);
@@ -84,7 +95,7 @@ impl App {
     /// Register a handler for DELETE requests.
     pub fn delete<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
         self.router.delete(path, handler);
@@ -93,7 +104,7 @@ impl App {
     /// Register a handler for OPTIONS requests.
     pub fn options<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
         self.router.options(path, handler);
@@ -102,7 +113,7 @@ impl App {
     /// Register a handler for HEAD requests.
     pub fn head<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
         self.router.head(path, handler);
@@ -111,7 +122,7 @@ impl App {
     /// Register a handler for all HTTP methods.
     pub fn all<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
         self.router.all(path, handler);
@@ -120,7 +131,7 @@ impl App {
     /// Register middleware that matches all paths and methods.
     pub fn r#use<F, Fut>(&mut self, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
         self.router.r#use(handler);
@@ -129,7 +140,7 @@ impl App {
     /// Register middleware that matches a path prefix and all methods.
     pub fn use_with_path<F, Fut>(&mut self, path: &str, handler: F)
     where
-        F: Fn(Arc<Request>, Response, Next) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Request>, Response, Next, HashMap<String, String>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
         self.router.use_with_path(path, handler);

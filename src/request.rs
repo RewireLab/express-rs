@@ -20,6 +20,8 @@ pub struct Request {
     headers: HeaderMap,
     body: Bytes,
     query: HashMap<String, String>,
+    /// Route parameters extracted from the path (e.g., `:id` → `params["id"]`).
+    pub params: HashMap<String, String>,
 }
 
 impl Request {
@@ -32,6 +34,7 @@ impl Request {
             headers,
             body,
             query,
+            params: HashMap::new(),
         }
     }
 
@@ -78,6 +81,11 @@ impl Request {
     /// Get a query parameter by name.
     pub fn query_param(&self, name: &str) -> Option<&str> {
         self.query.get(name).map(|s| s.as_str())
+    }
+
+    /// Get a route parameter by name.
+    pub fn param(&self, name: &str) -> Option<&str> {
+        self.params.get(name).map(|s| s.as_str())
     }
 }
 

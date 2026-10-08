@@ -67,7 +67,7 @@ async fn request(port: u16, method: &str, path: &str, body: Option<&str>) -> Str
 #[tokio::test]
 async fn test_basic_get_request() {
     let port = start_server(|app| {
-        app.get("/", |_req, mut res, _next| async move {
+        app.get("/", |_req, mut res, _next, _params| async move {
             res.status(200).text("Hello, World!");
             res
         });
@@ -95,7 +95,7 @@ async fn test_basic_get_request() {
 #[tokio::test]
 async fn test_custom_status_code() {
     let port = start_server(|app| {
-        app.get("/missing", |_req, mut res, _next| async move {
+        app.get("/missing", |_req, mut res, _next, _params| async move {
             res.status(404).text("Not Found");
             res
         });
@@ -118,7 +118,7 @@ async fn test_custom_status_code() {
 #[tokio::test]
 async fn test_custom_headers() {
     let port = start_server(|app| {
-        app.get("/", |_req, mut res, _next| async move {
+        app.get("/", |_req, mut res, _next, _params| async move {
             res.set_header("X-Custom", "test-value")
                 .set_header("X-Another", "another-value")
                 .text("OK");
@@ -143,7 +143,7 @@ async fn test_custom_headers() {
 #[tokio::test]
 async fn test_post_with_body() {
     let port = start_server(|app| {
-        app.post("/submit", |req, mut res, _next| async move {
+        app.post("/submit", |req, mut res, _next, _params| async move {
             let body = req.body_text();
             res.text(&format!("Received: {}", body));
             res
@@ -167,7 +167,7 @@ async fn test_post_with_body() {
 #[tokio::test]
 async fn test_query_parameters() {
     let port = start_server(|app| {
-        app.get("/search", |req, mut res, _next| async move {
+        app.get("/search", |req, mut res, _next, _params| async move {
             let name = req.query_param("name").unwrap_or("unknown");
             let count = req.query_param("count").unwrap_or("0");
             res.text(&format!("name={}, count={}", name, count));
@@ -192,7 +192,7 @@ async fn test_query_parameters() {
 #[tokio::test]
 async fn test_query_with_encoding() {
     let port = start_server(|app| {
-        app.get("/search", |req, mut res, _next| async move {
+        app.get("/search", |req, mut res, _next, _params| async move {
             let q = req.query_param("q").unwrap_or("");
             res.text(&format!("q={}", q));
             res
@@ -211,7 +211,7 @@ async fn test_query_with_encoding() {
 #[tokio::test]
 async fn test_multiple_sequential_requests() {
     let port = start_server(|app| {
-        app.get("/", |_req, mut res, _next| async move {
+        app.get("/", |_req, mut res, _next, _params| async move {
             res.text("OK");
             res
         });
@@ -232,7 +232,7 @@ async fn test_multiple_sequential_requests() {
 #[tokio::test]
 async fn test_keep_alive() {
     let port = start_server(|app| {
-        app.get("/", |_req, mut res, _next| async move {
+        app.get("/", |_req, mut res, _next, _params| async move {
             res.text("OK");
             res
         });
@@ -285,7 +285,7 @@ async fn test_keep_alive() {
 #[tokio::test]
 async fn test_empty_body() {
     let port = start_server(|app| {
-        app.post("/", |req, mut res, _next| async move {
+        app.post("/", |req, mut res, _next, _params| async move {
             let body = req.body_text();
             res.text(&format!("Body length: {}", body.len()));
             res
@@ -304,7 +304,7 @@ async fn test_empty_body() {
 #[tokio::test]
 async fn test_large_body() {
     let port = start_server(|app| {
-        app.post("/", |req, mut res, _next| async move {
+        app.post("/", |req, mut res, _next, _params| async move {
             let body = req.body_text();
             res.text(&format!("Body length: {}", body.len()));
             res
@@ -324,7 +324,7 @@ async fn test_large_body() {
 #[tokio::test]
 async fn test_json_response() {
     let port = start_server(|app| {
-        app.get("/api/data", |_req, mut res, _next| async move {
+        app.get("/api/data", |_req, mut res, _next, _params| async move {
             res.status(200).json(r#"{"message":"hello","count":42}"#);
             res
         });
@@ -352,7 +352,7 @@ async fn test_json_response() {
 #[tokio::test]
 async fn test_concurrent_requests() {
     let port = start_server(|app| {
-        app.get("/", |_req, mut res, _next| async move {
+        app.get("/", |_req, mut res, _next, _params| async move {
             res.text("OK");
             res
         });
@@ -380,7 +380,7 @@ async fn test_concurrent_requests() {
 #[tokio::test]
 async fn test_malformed_request_does_not_crash_server() {
     let port = start_server(|app| {
-        app.get("/", |_req, mut res, _next| async move {
+        app.get("/", |_req, mut res, _next, _params| async move {
             res.text("Still alive");
             res
         });
@@ -414,19 +414,19 @@ async fn test_malformed_request_does_not_crash_server() {
 #[tokio::test]
 async fn test_routing_different_methods() {
     let port = start_server(|app| {
-        app.get("/resource", |_req, mut res, _next| async move {
+        app.get("/resource", |_req, mut res, _next, _params| async move {
             res.text("GET");
             res
         });
-        app.post("/resource", |_req, mut res, _next| async move {
+        app.post("/resource", |_req, mut res, _next, _params| async move {
             res.text("POST");
             res
         });
-        app.put("/resource", |_req, mut res, _next| async move {
+        app.put("/resource", |_req, mut res, _next, _params| async move {
             res.text("PUT");
             res
         });
-        app.delete("/resource", |_req, mut res, _next| async move {
+        app.delete("/resource", |_req, mut res, _next, _params| async move {
             res.text("DELETE");
             res
         });
@@ -450,7 +450,7 @@ async fn test_routing_different_methods() {
 #[tokio::test]
 async fn test_routing_method_not_allowed() {
     let port = start_server(|app| {
-        app.get("/resource", |_req, mut res, _next| async move {
+        app.get("/resource", |_req, mut res, _next, _params| async move {
             res.text("GET");
             res
         });
@@ -469,15 +469,15 @@ async fn test_routing_method_not_allowed() {
 #[tokio::test]
 async fn test_routing_different_paths() {
     let port = start_server(|app| {
-        app.get("/users", |_req, mut res, _next| async move {
+        app.get("/users", |_req, mut res, _next, _params| async move {
             res.text("users list");
             res
         });
-        app.get("/users/123", |_req, mut res, _next| async move {
+        app.get("/users/123", |_req, mut res, _next, _params| async move {
             res.text("user 123");
             res
         });
-        app.get("/posts", |_req, mut res, _next| async move {
+        app.get("/posts", |_req, mut res, _next, _params| async move {
             res.text("posts list");
             res
         });
@@ -498,12 +498,12 @@ async fn test_routing_different_paths() {
 #[tokio::test]
 async fn test_middleware_use_all_paths() {
     let port = start_server(|app| {
-        app.r#use(|_req, mut res, next| async move {
+        app.r#use(|_req, mut res, next, _params| async move {
             res.set_header("X-Middleware", "hit");
-            next().await;
+            next(express_rs::router::NextCall::Continue).await;
             res
         });
-        app.get("/", |_req, mut res, _next| async move {
+        app.get("/", |_req, mut res, _next, _params| async move {
             res.text("OK");
             res
         });
@@ -522,16 +522,16 @@ async fn test_middleware_use_all_paths() {
 #[tokio::test]
 async fn test_middleware_use_path_prefix() {
     let port = start_server(|app| {
-        app.use_with_path("/api", |_req, mut res, next| async move {
+        app.use_with_path("/api", |_req, mut res, next, _params| async move {
             res.set_header("X-API", "true");
-            next().await;
+            next(express_rs::router::NextCall::Continue).await;
             res
         });
-        app.get("/api/users", |_req, mut res, _next| async move {
+        app.get("/api/users", |_req, mut res, _next, _params| async move {
             res.text("users");
             res
         });
-        app.get("/other", |_req, mut res, _next| async move {
+        app.get("/other", |_req, mut res, _next, _params| async move {
             res.text("other");
             res
         });
@@ -566,17 +566,17 @@ async fn test_middleware_use_path_prefix() {
 #[tokio::test]
 async fn test_next_continues_to_next_middleware() {
     let port = start_server(|app| {
-        app.r#use(|_req, mut res, next| async move {
+        app.r#use(|_req, mut res, next, _params| async move {
             res.set_header("X-First", "1");
-            next().await;
+            next(express_rs::router::NextCall::Continue).await;
             res
         });
-        app.r#use(|_req, mut res, next| async move {
+        app.r#use(|_req, mut res, next, _params| async move {
             res.set_header("X-Second", "2");
-            next().await;
+            next(express_rs::router::NextCall::Continue).await;
             res
         });
-        app.get("/", |_req, mut res, _next| async move {
+        app.get("/", |_req, mut res, _next, _params| async move {
             res.text("done");
             res
         });
@@ -604,12 +604,12 @@ async fn test_next_continues_to_next_middleware() {
 #[tokio::test]
 async fn test_no_next_stops_processing() {
     let port = start_server(|app| {
-        app.r#use(|_req, mut res, _next| async move {
+        app.r#use(|_req, mut res, _next, _params| async move {
             res.set_header("X-Blocked", "true");
             res.text("blocked");
             res
         });
-        app.get("/", |_req, mut res, _next| async move {
+        app.get("/", |_req, mut res, _next, _params| async move {
             res.text("should not reach");
             res
         });
@@ -637,7 +637,7 @@ async fn test_no_next_stops_processing() {
 #[tokio::test]
 async fn test_trailing_slash_optional() {
     let port = start_server(|app| {
-        app.get("/users", |_req, mut res, _next| async move {
+        app.get("/users", |_req, mut res, _next, _params| async move {
             res.text("users");
             res
         });
@@ -654,7 +654,7 @@ async fn test_trailing_slash_optional() {
 #[tokio::test]
 async fn test_app_all_matches_all_methods() {
     let port = start_server(|app| {
-        app.all("/resource", |_req, mut res, _next| async move {
+        app.all("/resource", |_req, mut res, _next, _params| async move {
             res.text("any method");
             res
         });
@@ -675,11 +675,11 @@ async fn test_app_all_matches_all_methods() {
 #[tokio::test]
 async fn test_route_ordering_first_match_wins() {
     let port = start_server(|app| {
-        app.get("/resource", |_req, mut res, _next| async move {
+        app.get("/resource", |_req, mut res, _next, _params| async move {
             res.text("first");
             res
         });
-        app.get("/resource", |_req, mut res, _next| async move {
+        app.get("/resource", |_req, mut res, _next, _params| async move {
             res.text("second");
             res
         });
@@ -702,12 +702,12 @@ async fn test_route_ordering_first_match_wins() {
 #[tokio::test]
 async fn test_middleware_runs_before_route_handler() {
     let port = start_server(|app| {
-        app.r#use(|_req, mut res, next| async move {
+        app.r#use(|_req, mut res, next, _params| async move {
             res.set_header("X-Before", "true");
-            next().await;
+            next(express_rs::router::NextCall::Continue).await;
             res
         });
-        app.get("/", |_req, mut res, _next| async move {
+        app.get("/", |_req, mut res, _next, _params| async move {
             res.set_header("X-Handler", "true");
             res.text("OK");
             res
@@ -731,7 +731,7 @@ async fn test_middleware_runs_before_route_handler() {
 #[tokio::test]
 async fn test_head_request() {
     let port = start_server(|app| {
-        app.get("/resource", |_req, mut res, _next| async move {
+        app.get("/resource", |_req, mut res, _next, _params| async move {
             res.text("body");
             res
         });
@@ -749,12 +749,12 @@ async fn test_head_request() {
 #[tokio::test]
 async fn test_middleware_can_modify_response() {
     let port = start_server(|app| {
-        app.r#use(|_req, mut res, next| async move {
-            next().await;
+        app.r#use(|_req, mut res, next, _params| async move {
+            next(express_rs::router::NextCall::Continue).await;
             res.set_header("X-After", "true");
             res
         });
-        app.get("/", |_req, mut res, _next| async move {
+        app.get("/", |_req, mut res, _next, _params| async move {
             res.text("OK");
             res
         });
@@ -773,17 +773,17 @@ async fn test_middleware_can_modify_response() {
 #[tokio::test]
 async fn test_multiple_middleware_and_route() {
     let port = start_server(|app| {
-        app.r#use(|_req, mut res, next| async move {
+        app.r#use(|_req, mut res, next, _params| async move {
             res.set_header("X-M1", "1");
-            next().await;
+            next(express_rs::router::NextCall::Continue).await;
             res
         });
-        app.r#use(|_req, mut res, next| async move {
+        app.r#use(|_req, mut res, next, _params| async move {
             res.set_header("X-M2", "2");
-            next().await;
+            next(express_rs::router::NextCall::Continue).await;
             res
         });
-        app.get("/", |_req, mut res, _next| async move {
+        app.get("/", |_req, mut res, _next, _params| async move {
             res.set_header("X-Handler", "H");
             res.text("OK");
             res
@@ -808,4 +808,394 @@ async fn test_multiple_middleware_and_route() {
         response
     );
     assert!(response.contains("OK"), "Expected body, got: {}", response);
+}
+
+// ============================================================
+// Phase 3: Route Parameter Tests
+// ============================================================
+
+#[tokio::test]
+async fn test_route_param_basic() {
+    let port = start_server(|app| {
+        app.get("/user/:id", |_req, mut res, _next, params| async move {
+            let id = params.get("id").map_or("", |v| v);
+            res.text(&format!("user {}", id));
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/user/123", None).await;
+    assert!(
+        response.contains("user 123"),
+        "Expected param capture, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_route_param_multiple() {
+    let port = start_server(|app| {
+        app.get(
+            "/user/:userId/post/:postId",
+            |_req, mut res, _next, params| async move {
+                let user = params.get("userId").map_or("", |v| v);
+                let post = params.get("postId").map_or("", |v| v);
+                res.text(&format!("user={} post={}", user, post));
+                res
+            },
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/user/42/post/99", None).await;
+    assert!(
+        response.contains("user=42"),
+        "Expected userId param, got: {}",
+        response
+    );
+    assert!(
+        response.contains("post=99"),
+        "Expected postId param, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_route_param_single_segment_only() {
+    let port = start_server(|app| {
+        app.get("/user/:id", |_req, mut res, _next, params| async move {
+            let id = params.get("id").map_or("", |v| v);
+            res.text(&format!("user {}", id));
+            res
+        });
+    })
+    .await;
+
+    // /user/123/edit should NOT match /user/:id (param matches single segment only)
+    let response = request(port, "GET", "/user/123/edit", None).await;
+    assert!(
+        !response.contains("user 123"),
+        "Should not match multi-segment, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_route_param_with_static_prefix() {
+    let port = start_server(|app| {
+        app.get(
+            "/api/users/:id",
+            |_req, mut res, _next, params| async move {
+                let id = params.get("id").map_or("", |v| v);
+                res.text(&format!("api user {}", id));
+                res
+            },
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/api/users/456", None).await;
+    assert!(
+        response.contains("api user 456"),
+        "Expected param after static prefix, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_wildcard_splat() {
+    let port = start_server(|app| {
+        app.get("/files/*splat", |_req, mut res, _next, params| async move {
+            let splat = params.get("splat").map_or("", |v| v);
+            res.text(&format!("files: {}", splat));
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/files/a/b/c", None).await;
+    assert!(
+        response.contains("files: a/b/c"),
+        "Expected wildcard capture, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_wildcard_single_segment() {
+    let port = start_server(|app| {
+        app.get("/files/*splat", |_req, mut res, _next, params| async move {
+            let splat = params.get("splat").map_or("", |v| v);
+            res.text(&format!("files: {}", splat));
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/files/readme.txt", None).await;
+    assert!(
+        response.contains("files: readme.txt"),
+        "Expected wildcard single segment, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_optional_param_present() {
+    let port = start_server(|app| {
+        app.get(
+            "/user/:id{/:op}",
+            |_req, mut res, _next, params| async move {
+                let id = params.get("id").map_or("", |v| v);
+                let op = params.get("op").map_or("view", |v| v);
+                res.text(&format!("{} {}", op, id));
+                res
+            },
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/user/123/edit", None).await;
+    assert!(
+        response.contains("edit 123"),
+        "Expected optional param present, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_optional_param_absent() {
+    let port = start_server(|app| {
+        app.get(
+            "/user/:id{/:op}",
+            |_req, mut res, _next, params| async move {
+                let id = params.get("id").map_or("", |v| v);
+                let op = params.get("op").map_or("view", |v| v);
+                res.text(&format!("{} {}", op, id));
+                res
+            },
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/user/123", None).await;
+    assert!(
+        response.contains("view 123"),
+        "Expected optional param absent, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_next_route_skips_to_next_route() {
+    let port = start_server(|app| {
+        app.get("/resource", |_req, mut res, next, _params| async move {
+            res.set_header("X-First", "1");
+            next(express_rs::router::NextCall::Route).await;
+            res
+        });
+        app.get("/resource", |_req, mut res, _next, _params| async move {
+            res.text("second");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/resource", None).await;
+    assert!(
+        response.contains("x-first: 1"),
+        "Expected first route header, got: {}",
+        response
+    );
+    assert!(
+        response.contains("second"),
+        "Expected second route body, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_param_with_middleware() {
+    let port = start_server(|app| {
+        app.r#use(|_req, mut res, next, _params| async move {
+            res.set_header("X-Middleware", "true");
+            next(express_rs::router::NextCall::Continue).await;
+            res
+        });
+        app.get("/user/:id", |_req, mut res, _next, params| async move {
+            let id = params.get("id").map_or("", |v| v);
+            res.text(&format!("user {}", id));
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/user/789", None).await;
+    assert!(
+        response.contains("x-middleware: true"),
+        "Expected middleware header, got: {}",
+        response
+    );
+    assert!(
+        response.contains("user 789"),
+        "Expected param capture, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_param_decoding() {
+    let port = start_server(|app| {
+        app.get("/user/:name", |_req, mut res, _next, params| async move {
+            let name = params.get("name").map_or("", |v| v);
+            res.text(&format!("user {}", name));
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/user/foo%20bar", None).await;
+    assert!(
+        response.contains("user foo bar"),
+        "Expected decoded param, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_dot_delimiter_in_path() {
+    let port = start_server(|app| {
+        app.get(
+            "/:name.:format",
+            |_req, mut res, _next, params| async move {
+                let name = params.get("name").map_or("", |v| v);
+                let format = params.get("format").map_or("none", |v| v);
+                res.text(&format!("{} as {}", name, format));
+                res
+            },
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/foo.json", None).await;
+    assert!(
+        response.contains("foo as json"),
+        "Expected dot-delimited params, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_optional_format_suffix() {
+    let port = start_server(|app| {
+        app.get(
+            "/:name{.:format}",
+            |_req, mut res, _next, params| async move {
+                let name = params.get("name").map_or("", |v| v);
+                let format = params.get("format").map_or("html", |v| v);
+                res.text(&format!("{} as {}", name, format));
+                res
+            },
+        );
+    })
+    .await;
+
+    let bare = request(port, "GET", "/foo", None).await;
+    assert!(
+        bare.contains("foo as html"),
+        "Expected default format, got: {}",
+        bare
+    );
+
+    let typed = request(port, "GET", "/foo.json", None).await;
+    assert!(
+        typed.contains("foo as json"),
+        "Expected captured format, got: {}",
+        typed
+    );
+}
+
+#[tokio::test]
+async fn test_escaped_literals_in_path() {
+    let port = start_server(|app| {
+        app.get(
+            "/:user\\(:op\\)",
+            |_req, mut res, _next, params| async move {
+                let user = params.get("user").map_or("", |v| v);
+                let op = params.get("op").map_or("", |v| v);
+                res.text(&format!("{} {}", op, user));
+                res
+            },
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/tj(edit)", None).await;
+    assert!(
+        response.contains("edit tj"),
+        "Expected escaped literals, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_param_adjacent_to_static_text() {
+    let port = start_server(|app| {
+        app.get(
+            "/api/v:version/users",
+            |_req, mut res, _next, params| async move {
+                let version = params.get("version").map_or("", |v| v);
+                res.text(&format!("v{}", version));
+                res
+            },
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/api/v2/users", None).await;
+    assert!(
+        response.contains("v2"),
+        "Expected param after static text, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_wildcard_captures_multiple_segments() {
+    let port = start_server(|app| {
+        app.get("/files/*splat", |_req, mut res, _next, params| async move {
+            let splat = params.get("splat").map_or("", |v| v);
+            res.text(splat);
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/files/a/b/c.txt", None).await;
+    assert!(
+        response.contains("a/b/c.txt"),
+        "Expected multi-segment wildcard, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_query_string_is_not_part_of_the_path() {
+    let port = start_server(|app| {
+        app.get("/users/:id", |_req, mut res, _next, params| async move {
+            let id = params.get("id").map_or("", |v| v);
+            res.text(&format!("user {}", id));
+            res
+        });
+    })
+    .await;
+
+    // A query string must never confuse route matching.
+    let response = request(port, "GET", "/users/77?verbose=true", None).await;
+    assert!(
+        response.contains("user 77"),
+        "Expected query to be ignored for matching, got: {}",
+        response
+    );
 }
