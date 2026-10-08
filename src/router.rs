@@ -215,8 +215,7 @@ impl Router {
     }
 
     /// Dispatch a request through the router.
-    pub async fn handle(&self, req: Request, res: Response) -> Response {
-        let req = Arc::new(req);
+    pub async fn handle(&self, req: Arc<Request>, res: Response) -> Response {
         let state = Arc::new(Mutex::new(RouterState {
             idx: 0,
             next_called: true,
@@ -267,9 +266,17 @@ impl Router {
                 }
             };
 
-            // Check HTTP method for route layers
+            // Check HTTP method for route layers.
+            //
+            // Express falls back from HEAD to GET when no HEAD handler is
+            // registered (`Route#_handlesMethod`), so a HEAD request still
+            // reaches a `app.get()` route — the body is then suppressed
+            // when the response is finalised.
             if let Some(ref method) = layer.method {
-                if method != req.method() {
+                let method_matches = *method == *req.method()
+                    || (*req.method() == Method::HEAD && *method == Method::GET);
+
+                if !method_matches {
                     state.lock().unwrap().next_called = true;
                     continue;
                 }

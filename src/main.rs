@@ -5,7 +5,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new();
 
     app.get("/", |_req, mut res, _next, _params| async move {
-        res.status(200).text("Hello from express-rs!");
+        res.status(200).send("Hello from express-rs!");
         res
     });
 
