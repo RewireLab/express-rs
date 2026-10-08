@@ -10,7 +10,7 @@ The point of express-rs is to *rewire* an existing idea and learn from the proce
 
 ## Status
 
-**Phase 4/5: Request + Response** — complete.
+**Phase 6: Error middleware** — complete.
 
 The framework currently provides:
 
@@ -31,8 +31,11 @@ The framework currently provides:
 - Case sensitivity toggle (`app.case_sensitive()`)
 - **Response:** `send()`, `json()`, `sendStatus()`, `set()`/`get()`/`append()`, `content_type()`, `location()`, `redirect()`, `vary()`, `status()`
 - **Request:** `header()`, `accepts()`, `acceptsEncodings()`/`acceptsCharsets()`/`acceptsLanguages()`, `is()`, `host()`/`hostname()`, `protocol()`/`secure()`, `xhr()`
+- **Error handling:** `use_error_handler()`, `next(NextCall::Error(..))`, `Err` from a handler
 - **Framing:** `Content-Length`, weak `ETag`, conditional-request `304`, `204`/`205` stripping, HEAD body suppression
 - **Content types:** extension resolution including Express 5's `text/javascript` for `.js`
+- **Error middleware:** `use_error_handler()`, `next(err)`, and a handler returning `Err` as the equivalent of a rejected promise
+- **Default error response:** 500 with the message, `Content-Security-Policy`, and `nosniff`, mirroring `finalhandler`
 
 ## Quick Start
 
@@ -50,8 +53,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     app.get("/user/:id", |_req, res, _next, params| async move {
         let id = params.get("id").map_or("", |v| v);
-        res.text(&format!("user {}", id));
-        res
+        res.send(&format!("user {}", id));
+        Ok(res)
+    });
+
+    // Error middleware takes the error as its first argument.
+    app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+        res.status(err.status()).send(&err.message());
+        Ok(res)
     });
 
     app.listen(3000).await?;
@@ -105,8 +114,12 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | **Finalisation in the server** | Express applies `Content-Length`, ETag, freshness, and HEAD suppression inside `res.send()`, where the response can see the request. Here the handler owns the response, so the server applies those steps after it returns, in the same order Express does. |
 | **HeadBody** | A body that reports a length but yields no bytes. hyper derives framing from the body it is handed, so simply emptying the body for HEAD would also drop `Content-Length`. |
 | **serde for JSON** | `res.json(&value)` serialises any `Serialize` type rather than taking a pre-built string, which is the useful shape in Rust. `json_str()` covers the raw case. |
-| **sha1 for ETag** | Express's ETag format is `"<hexlen>-<27 chars of base64 SHA-1>"`; matching it needs a real SHA-1 rather than a stand-in hash. |
 | **HEAD falls back to GET** | Express's `Route#_handlesMethod` maps HEAD onto GET when no HEAD handler is registered, so `app.get()` routes still answer HEAD requests. |
+| **Handlers return `Result<Response, Error>`** | Express 5 forwards a rejected promise to error middleware. `Err` is the Rust equivalent, and it is the only way an `async` handler can report failure given that it returns the response. |
+| **Error handlers take the error by value** | A borrowed `&Error` cannot be captured by an `async` block, which would make `async fn` error handlers unwritable. |
+| **sha1 for ETag** | Express's ETag format is `"<hexlen>-<27 chars of base64 SHA-1>"`; matching it needs a real SHA-1 rather than a stand-in hash. |
+| **`use_error_handler` instead of arity** | Express tells handlers and error handlers apart by `fn.length === 4`. Rust closures cannot be inspected that way, so the distinction lives in the signature: `use_error_handler` takes the error as its first parameter and the compiler enforces it. |
+| **Route layers skipped while an error is pending** | Express's `Router#handle` does `if (layerError) { match = false }`, so only middleware can catch an error. Replicated literally. |
 
 ### Dependencies
 
@@ -149,6 +162,11 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `res.location()` / `redirect()` | ✅ | Express 5 `redirect(status, url)` order |
 | `res.vary()` | ✅ | de-duplicates on a second add |
 | `res.status()` validation | ⚠️ | out-of-range codes ignored, not thrown |
+| `next(err)` → error middleware | ✅ | `NextCall::Error` or a returned `Err` |
+| Error middleware arity | ⚠️ | `use_error_handler()`, not `fn.length === 4` |
+| Route-scoped error handlers | ❌ | needs multi-handler routes |
+| Rejected promise → error handler | ✅ | a handler returning `Err` |
+| Default 500 on unhandled error | ✅ | message plus CSP and `nosniff` |
 | Weak ETag on `send()` | ✅ | matches the `etag` package format |
 | Conditional request → 304 | ✅ | `If-None-Match` |
 | HEAD body suppression | ✅ | keeps `Content-Length` |
@@ -182,6 +200,14 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 - `req.fresh()` compares ETags but not `If-Modified-Since` timestamps, which would need a date parser.
 - `accepts()` returns the string that was offered rather than the resolved MIME type.
 
+### Known differences in error handling
+
+- Handlers return `Result<Response, Error>` rather than `Response`, so an `async` failure has somewhere to go. Express 5's rejected-promise forwarding maps onto this directly.
+- Error middleware is registered with `use_error_handler()` and takes the error as its first argument. Express infers this from `fn.length === 4`, which Rust closures cannot expose.
+- The error is passed **by value**, since a borrowed reference cannot be captured by an `async` block.
+- Returning `Err` discards any headers the handler had already set. Express keeps a single `res` object for the whole request, so headers set before `next(err)` normally survive — and they still do here, as long as the handler returns `Ok(res)` rather than `Err`. `test_returning_err_loses_headers_set_before_it` pins this behaviour.
+- **Route-scoped error handlers are not supported.** Express's `app.get(path, fn, errFn)` puts every handler in one route whose own dispatch runs error handlers. Here each registration is a separate layer, and a route layer is skipped the moment an error exists — so an error handler must be registered with `use_error_handler`. Supporting the Express shape needs multi-handler routes.
+
 ## Testing
 
 ```bash
@@ -190,8 +216,8 @@ cargo test
 
 Integration tests start a real server on a random port and make actual HTTP requests over TCP.
 
-- 52 unit tests across the path matcher, MIME resolution, ETags, and request negotiation
-- 68 integration tests covering the HTTP foundation, routing, middleware, path syntax, and the response/request API
+- 56 unit tests across the path matcher, MIME, ETags, request negotiation, and errors
+- 87 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, and error propagation
 
 ```bash
 cargo fmt --check   # formatting
