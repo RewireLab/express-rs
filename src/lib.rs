@@ -26,7 +26,7 @@
 //!     let mut app = App::new();
 //!
 //!     app.get("/", |_req, mut res, _next, _params| async move {
-//!         res.status(200).text("Hello, World!");
+//!         res.status(200).send("Hello, World!");
 //!         res
 //!     });
 //!
@@ -37,6 +37,8 @@
 
 pub mod app;
 pub mod error;
+pub mod etag;
+pub mod mime;
 pub mod path;
 pub mod request;
 pub mod response;

@@ -24,7 +24,7 @@ use std::sync::Arc;
 ///     let mut app = App::new();
 ///
 ///     app.get("/", |_req, mut res, _next, _params| async move {
-///         res.status(200).text("Hello, World!");
+///         res.status(200).send("Hello, World!");
 ///         res
 ///     });
 ///

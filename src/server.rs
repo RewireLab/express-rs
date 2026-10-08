@@ -65,11 +65,16 @@ impl Server {
                         let collected = body.collect().await.unwrap_or_default();
                         let body_bytes = collected.to_bytes();
 
-                        let request =
-                            Request::new(parts.method, parts.uri, parts.headers, body_bytes);
-                        let response = Response::new();
+                        let request = Arc::new(Request::new(
+                            parts.method,
+                            parts.uri,
+                            parts.headers,
+                            body_bytes,
+                        ));
+                        let response = Response::new().with_accept(request.header("accept"));
 
-                        let response = router.handle(request, response).await;
+                        let mut response = router.handle(request.clone(), response).await;
+                        response.finish(&request);
                         let hyper_response = response.into_hyper_response();
                         Ok::<_, Infallible>(hyper_response)
                     }

@@ -10,7 +10,7 @@ The point of express-rs is to *rewire* an existing idea and learn from the proce
 
 ## Status
 
-**Phase 3: Route Parameters + Wildcards** — complete.
+**Phase 4/5: Request + Response** — complete.
 
 The framework currently provides:
 
@@ -29,6 +29,10 @@ The framework currently provides:
 - **Delimiters:** literal `.` and escaped `\(` `\)` inside paths
 - **`next('route')`:** skip to the next matching route
 - Case sensitivity toggle (`app.case_sensitive()`)
+- **Response:** `send()`, `json()`, `sendStatus()`, `set()`/`get()`/`append()`, `content_type()`, `location()`, `redirect()`, `vary()`, `status()`
+- **Request:** `header()`, `accepts()`, `acceptsEncodings()`/`acceptsCharsets()`/`acceptsLanguages()`, `is()`, `host()`/`hostname()`, `protocol()`/`secure()`, `xhr()`
+- **Framing:** `Content-Length`, weak `ETag`, conditional-request `304`, `204`/`205` stripping, HEAD body suppression
+- **Content types:** extension resolution including Express 5's `text/javascript` for `.js`
 
 ## Quick Start
 
@@ -66,6 +70,8 @@ src/
   path.rs      — Path pattern matcher (params, wildcards, optionals)
   request.rs   — Request wrapper (method, path, headers, body, query)
   response.rs  — Response wrapper (status, headers, body)
+  mime.rs      — Content type resolution and charset handling
+  etag.rs      — Entity tag generation and comparison
   error.rs     — Error types
 ```
 
@@ -96,6 +102,11 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | **Router with layer stack** | Inspired by `pillarjs/router`. Layers are matched in order; `next()` continues to the next matching layer. |
 | **Hand-written path matcher** | `path.rs` implements the Express 5 subset of `path-to-regexp`: params, wildcards, optional groups, delimiters, and escapes, with backtracking. No regex crate needed. |
 | **Mandatory-variant pass** | Optional groups are resolved by first trying a variant with every group required, which binds `:name` and `.format` correctly instead of letting a greedy param swallow the delimiter. |
+| **Finalisation in the server** | Express applies `Content-Length`, ETag, freshness, and HEAD suppression inside `res.send()`, where the response can see the request. Here the handler owns the response, so the server applies those steps after it returns, in the same order Express does. |
+| **HeadBody** | A body that reports a length but yields no bytes. hyper derives framing from the body it is handed, so simply emptying the body for HEAD would also drop `Content-Length`. |
+| **serde for JSON** | `res.json(&value)` serialises any `Serialize` type rather than taking a pre-built string, which is the useful shape in Rust. `json_str()` covers the raw case. |
+| **sha1 for ETag** | Express's ETag format is `"<hexlen>-<27 chars of base64 SHA-1>"`; matching it needs a real SHA-1 rather than a stand-in hash. |
+| **HEAD falls back to GET** | Express's `Route#_handlesMethod` maps HEAD onto GET when no HEAD handler is registered, so `app.get()` routes still answer HEAD requests. |
 
 ### Dependencies
 
@@ -105,8 +116,11 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `hyper` | HTTP/1.1 server implementation |
 | `hyper-util` | Tokio I/O adapter for hyper |
 | `http` | HTTP types (Method, StatusCode, HeaderMap, Uri) |
+| `http-body` | `Body` trait, needed for the HEAD body type |
 | `http-body-util` | Body collection utilities |
 | `bytes` | Efficient byte buffers |
+| `serde` / `serde_json` | JSON serialisation for `res.json()` |
+| `sha1` | ETag generation |
 
 ## Compatibility matrix
 
@@ -127,12 +141,30 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | Dot delimiter / escapes | ✅ | `.:ext`, `\(`, `\)` |
 | `next('route')` | ✅ | skip to next route |
 | Case sensitivity | ✅ | `app.case_sensitive()` |
+| `res.send()` | ✅ | string, typed JSON, bytes |
+| `res.json()` | ✅ | any `Serialize` value |
+| `res.sendStatus()` | ✅ | reason phrase as text |
+| `res.set()` / `get()` / `append()` | ✅ | |
+| `res.content_type()` | ✅ | Express's `type()`; `type` is a Rust keyword |
+| `res.location()` / `redirect()` | ✅ | Express 5 `redirect(status, url)` order |
+| `res.vary()` | ✅ | de-duplicates on a second add |
+| `res.status()` validation | ⚠️ | out-of-range codes ignored, not thrown |
+| Weak ETag on `send()` | ✅ | matches the `etag` package format |
+| Conditional request → 304 | ✅ | `If-None-Match` |
+| HEAD body suppression | ✅ | keeps `Content-Length` |
+| `req.header()` | ✅ | `referer`/`referrer` interchangeable |
+| `req.accepts()` family | ✅ | returns the offered string, not the MIME type |
+| `req.is()` | ✅ | full type or extension |
+| `req.host()` / `hostname()` | ✅ | Express 5 keeps the port |
+| `req.xhr()` | ✅ | |
+| `req.fresh()` | ✅ | ETag branch; date comparison not implemented |
 | Strict routing | ⚠️ | flag accepted, not enforced |
 | `next('router')` | ❌ | not implemented |
 | Error middleware | ❌ | not implemented |
 | `app.param()` callbacks | ❌ | not implemented |
-| `res.redirect()` | ❌ | not implemented |
 | `res.cookie()` | ❌ | not implemented |
+| `res.format()` | ❌ | not implemented |
+| `res.sendFile()` | ❌ | not implemented |
 | Body parsing (JSON, form) | ❌ | not implemented |
 | Static files | ❌ | not implemented |
 
@@ -142,6 +174,13 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 - `req.params` is delivered to handlers as a `HashMap<String, String>` argument instead of living on the request object.
 - Strict routing is accepted but not yet enforced; trailing slashes are always optional.
 - Handlers must return the `Response`, because Rust ownership makes an out-parameter awkward across an await point.
+- `res.status()` ignores out-of-range codes instead of throwing `TypeError`/`RangeError`, because a handler here returns the `Response` rather than a `Result` and has no channel to report the failure.
+- `res.redirect()` takes the Express 5 `(status, url)` order only; the legacy `(url, status)` order is gone.
+- `content_type()` replaces `type()`, which is a reserved word in Rust.
+- `append()` comma-joins values into one header, so `Set-Cookie` is not supported.
+- `protocol()` always reports `http`; `X-Forwarded-Proto` is not trusted without a trust-proxy setting.
+- `req.fresh()` compares ETags but not `If-Modified-Since` timestamps, which would need a date parser.
+- `accepts()` returns the string that was offered rather than the resolved MIME type.
 
 ## Testing
 
@@ -151,8 +190,8 @@ cargo test
 
 Integration tests start a real server on a random port and make actual HTTP requests over TCP.
 
-- 17 unit tests for the path matcher
-- 44 integration tests covering the HTTP foundation, routing, middleware, and path syntax
+- 52 unit tests across the path matcher, MIME resolution, ETags, and request negotiation
+- 68 integration tests covering the HTTP foundation, routing, middleware, path syntax, and the response/request API
 
 ```bash
 cargo fmt --check   # formatting

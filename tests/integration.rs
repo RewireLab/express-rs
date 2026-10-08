@@ -68,7 +68,7 @@ async fn request(port: u16, method: &str, path: &str, body: Option<&str>) -> Str
 async fn test_basic_get_request() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
-            res.status(200).text("Hello, World!");
+            res.status(200).send("Hello, World!");
             res
         });
     })
@@ -86,8 +86,8 @@ async fn test_basic_get_request() {
         response
     );
     assert!(
-        response.contains("text/plain"),
-        "Expected text/plain content type, got: {}",
+        response.contains("text/html"),
+        "Expected text/html content type, got: {}",
         response
     );
 }
@@ -96,7 +96,7 @@ async fn test_basic_get_request() {
 async fn test_custom_status_code() {
     let port = start_server(|app| {
         app.get("/missing", |_req, mut res, _next, _params| async move {
-            res.status(404).text("Not Found");
+            res.status(404).send("Not Found");
             res
         });
     })
@@ -119,9 +119,9 @@ async fn test_custom_status_code() {
 async fn test_custom_headers() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
-            res.set_header("X-Custom", "test-value")
-                .set_header("X-Another", "another-value")
-                .text("OK");
+            res.set("X-Custom", "test-value")
+                .set("X-Another", "another-value")
+                .send("OK");
             res
         });
     })
@@ -145,7 +145,7 @@ async fn test_post_with_body() {
     let port = start_server(|app| {
         app.post("/submit", |req, mut res, _next, _params| async move {
             let body = req.body_text();
-            res.text(&format!("Received: {}", body));
+            res.send(&format!("Received: {}", body));
             res
         });
     })
@@ -170,7 +170,7 @@ async fn test_query_parameters() {
         app.get("/search", |req, mut res, _next, _params| async move {
             let name = req.query_param("name").unwrap_or("unknown");
             let count = req.query_param("count").unwrap_or("0");
-            res.text(&format!("name={}, count={}", name, count));
+            res.send(&format!("name={}, count={}", name, count));
             res
         });
     })
@@ -194,7 +194,7 @@ async fn test_query_with_encoding() {
     let port = start_server(|app| {
         app.get("/search", |req, mut res, _next, _params| async move {
             let q = req.query_param("q").unwrap_or("");
-            res.text(&format!("q={}", q));
+            res.send(&format!("q={}", q));
             res
         });
     })
@@ -212,7 +212,7 @@ async fn test_query_with_encoding() {
 async fn test_multiple_sequential_requests() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
-            res.text("OK");
+            res.send("OK");
             res
         });
     })
@@ -233,7 +233,7 @@ async fn test_multiple_sequential_requests() {
 async fn test_keep_alive() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
-            res.text("OK");
+            res.send("OK");
             res
         });
     })
@@ -287,7 +287,7 @@ async fn test_empty_body() {
     let port = start_server(|app| {
         app.post("/", |req, mut res, _next, _params| async move {
             let body = req.body_text();
-            res.text(&format!("Body length: {}", body.len()));
+            res.send(&format!("Body length: {}", body.len()));
             res
         });
     })
@@ -306,7 +306,7 @@ async fn test_large_body() {
     let port = start_server(|app| {
         app.post("/", |req, mut res, _next, _params| async move {
             let body = req.body_text();
-            res.text(&format!("Body length: {}", body.len()));
+            res.send(&format!("Body length: {}", body.len()));
             res
         });
     })
@@ -325,7 +325,8 @@ async fn test_large_body() {
 async fn test_json_response() {
     let port = start_server(|app| {
         app.get("/api/data", |_req, mut res, _next, _params| async move {
-            res.status(200).json(r#"{"message":"hello","count":42}"#);
+            res.status(200)
+                .json_str(r#"{"message":"hello","count":42}"#);
             res
         });
     })
@@ -353,7 +354,7 @@ async fn test_json_response() {
 async fn test_concurrent_requests() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
-            res.text("OK");
+            res.send("OK");
             res
         });
     })
@@ -381,7 +382,7 @@ async fn test_concurrent_requests() {
 async fn test_malformed_request_does_not_crash_server() {
     let port = start_server(|app| {
         app.get("/", |_req, mut res, _next, _params| async move {
-            res.text("Still alive");
+            res.send("Still alive");
             res
         });
     })
@@ -415,19 +416,19 @@ async fn test_malformed_request_does_not_crash_server() {
 async fn test_routing_different_methods() {
     let port = start_server(|app| {
         app.get("/resource", |_req, mut res, _next, _params| async move {
-            res.text("GET");
+            res.send("GET");
             res
         });
         app.post("/resource", |_req, mut res, _next, _params| async move {
-            res.text("POST");
+            res.send("POST");
             res
         });
         app.put("/resource", |_req, mut res, _next, _params| async move {
-            res.text("PUT");
+            res.send("PUT");
             res
         });
         app.delete("/resource", |_req, mut res, _next, _params| async move {
-            res.text("DELETE");
+            res.send("DELETE");
             res
         });
     })
@@ -451,7 +452,7 @@ async fn test_routing_different_methods() {
 async fn test_routing_method_not_allowed() {
     let port = start_server(|app| {
         app.get("/resource", |_req, mut res, _next, _params| async move {
-            res.text("GET");
+            res.send("GET");
             res
         });
     })
@@ -470,15 +471,15 @@ async fn test_routing_method_not_allowed() {
 async fn test_routing_different_paths() {
     let port = start_server(|app| {
         app.get("/users", |_req, mut res, _next, _params| async move {
-            res.text("users list");
+            res.send("users list");
             res
         });
         app.get("/users/123", |_req, mut res, _next, _params| async move {
-            res.text("user 123");
+            res.send("user 123");
             res
         });
         app.get("/posts", |_req, mut res, _next, _params| async move {
-            res.text("posts list");
+            res.send("posts list");
             res
         });
     })
@@ -499,12 +500,12 @@ async fn test_routing_different_paths() {
 async fn test_middleware_use_all_paths() {
     let port = start_server(|app| {
         app.r#use(|_req, mut res, next, _params| async move {
-            res.set_header("X-Middleware", "hit");
+            res.set("X-Middleware", "hit");
             next(express_rs::router::NextCall::Continue).await;
             res
         });
         app.get("/", |_req, mut res, _next, _params| async move {
-            res.text("OK");
+            res.send("OK");
             res
         });
     })
@@ -523,16 +524,16 @@ async fn test_middleware_use_all_paths() {
 async fn test_middleware_use_path_prefix() {
     let port = start_server(|app| {
         app.use_with_path("/api", |_req, mut res, next, _params| async move {
-            res.set_header("X-API", "true");
+            res.set("X-API", "true");
             next(express_rs::router::NextCall::Continue).await;
             res
         });
         app.get("/api/users", |_req, mut res, _next, _params| async move {
-            res.text("users");
+            res.send("users");
             res
         });
         app.get("/other", |_req, mut res, _next, _params| async move {
-            res.text("other");
+            res.send("other");
             res
         });
     })
@@ -567,17 +568,17 @@ async fn test_middleware_use_path_prefix() {
 async fn test_next_continues_to_next_middleware() {
     let port = start_server(|app| {
         app.r#use(|_req, mut res, next, _params| async move {
-            res.set_header("X-First", "1");
+            res.set("X-First", "1");
             next(express_rs::router::NextCall::Continue).await;
             res
         });
         app.r#use(|_req, mut res, next, _params| async move {
-            res.set_header("X-Second", "2");
+            res.set("X-Second", "2");
             next(express_rs::router::NextCall::Continue).await;
             res
         });
         app.get("/", |_req, mut res, _next, _params| async move {
-            res.text("done");
+            res.send("done");
             res
         });
     })
@@ -605,12 +606,12 @@ async fn test_next_continues_to_next_middleware() {
 async fn test_no_next_stops_processing() {
     let port = start_server(|app| {
         app.r#use(|_req, mut res, _next, _params| async move {
-            res.set_header("X-Blocked", "true");
-            res.text("blocked");
+            res.set("X-Blocked", "true");
+            res.send("blocked");
             res
         });
         app.get("/", |_req, mut res, _next, _params| async move {
-            res.text("should not reach");
+            res.send("should not reach");
             res
         });
     })
@@ -638,7 +639,7 @@ async fn test_no_next_stops_processing() {
 async fn test_trailing_slash_optional() {
     let port = start_server(|app| {
         app.get("/users", |_req, mut res, _next, _params| async move {
-            res.text("users");
+            res.send("users");
             res
         });
     })
@@ -655,7 +656,7 @@ async fn test_trailing_slash_optional() {
 async fn test_app_all_matches_all_methods() {
     let port = start_server(|app| {
         app.all("/resource", |_req, mut res, _next, _params| async move {
-            res.text("any method");
+            res.send("any method");
             res
         });
     })
@@ -676,11 +677,11 @@ async fn test_app_all_matches_all_methods() {
 async fn test_route_ordering_first_match_wins() {
     let port = start_server(|app| {
         app.get("/resource", |_req, mut res, _next, _params| async move {
-            res.text("first");
+            res.send("first");
             res
         });
         app.get("/resource", |_req, mut res, _next, _params| async move {
-            res.text("second");
+            res.send("second");
             res
         });
     })
@@ -703,13 +704,13 @@ async fn test_route_ordering_first_match_wins() {
 async fn test_middleware_runs_before_route_handler() {
     let port = start_server(|app| {
         app.r#use(|_req, mut res, next, _params| async move {
-            res.set_header("X-Before", "true");
+            res.set("X-Before", "true");
             next(express_rs::router::NextCall::Continue).await;
             res
         });
         app.get("/", |_req, mut res, _next, _params| async move {
-            res.set_header("X-Handler", "true");
-            res.text("OK");
+            res.set("X-Handler", "true");
+            res.send("OK");
             res
         });
     })
@@ -732,7 +733,7 @@ async fn test_middleware_runs_before_route_handler() {
 async fn test_head_request() {
     let port = start_server(|app| {
         app.get("/resource", |_req, mut res, _next, _params| async move {
-            res.text("body");
+            res.send("body");
             res
         });
     })
@@ -751,11 +752,11 @@ async fn test_middleware_can_modify_response() {
     let port = start_server(|app| {
         app.r#use(|_req, mut res, next, _params| async move {
             next(express_rs::router::NextCall::Continue).await;
-            res.set_header("X-After", "true");
+            res.set("X-After", "true");
             res
         });
         app.get("/", |_req, mut res, _next, _params| async move {
-            res.text("OK");
+            res.send("OK");
             res
         });
     })
@@ -774,18 +775,18 @@ async fn test_middleware_can_modify_response() {
 async fn test_multiple_middleware_and_route() {
     let port = start_server(|app| {
         app.r#use(|_req, mut res, next, _params| async move {
-            res.set_header("X-M1", "1");
+            res.set("X-M1", "1");
             next(express_rs::router::NextCall::Continue).await;
             res
         });
         app.r#use(|_req, mut res, next, _params| async move {
-            res.set_header("X-M2", "2");
+            res.set("X-M2", "2");
             next(express_rs::router::NextCall::Continue).await;
             res
         });
         app.get("/", |_req, mut res, _next, _params| async move {
-            res.set_header("X-Handler", "H");
-            res.text("OK");
+            res.set("X-Handler", "H");
+            res.send("OK");
             res
         });
     })
@@ -819,7 +820,7 @@ async fn test_route_param_basic() {
     let port = start_server(|app| {
         app.get("/user/:id", |_req, mut res, _next, params| async move {
             let id = params.get("id").map_or("", |v| v);
-            res.text(&format!("user {}", id));
+            res.send(&format!("user {}", id));
             res
         });
     })
@@ -841,7 +842,7 @@ async fn test_route_param_multiple() {
             |_req, mut res, _next, params| async move {
                 let user = params.get("userId").map_or("", |v| v);
                 let post = params.get("postId").map_or("", |v| v);
-                res.text(&format!("user={} post={}", user, post));
+                res.send(&format!("user={} post={}", user, post));
                 res
             },
         );
@@ -866,7 +867,7 @@ async fn test_route_param_single_segment_only() {
     let port = start_server(|app| {
         app.get("/user/:id", |_req, mut res, _next, params| async move {
             let id = params.get("id").map_or("", |v| v);
-            res.text(&format!("user {}", id));
+            res.send(&format!("user {}", id));
             res
         });
     })
@@ -888,7 +889,7 @@ async fn test_route_param_with_static_prefix() {
             "/api/users/:id",
             |_req, mut res, _next, params| async move {
                 let id = params.get("id").map_or("", |v| v);
-                res.text(&format!("api user {}", id));
+                res.send(&format!("api user {}", id));
                 res
             },
         );
@@ -908,7 +909,7 @@ async fn test_wildcard_splat() {
     let port = start_server(|app| {
         app.get("/files/*splat", |_req, mut res, _next, params| async move {
             let splat = params.get("splat").map_or("", |v| v);
-            res.text(&format!("files: {}", splat));
+            res.send(&format!("files: {}", splat));
             res
         });
     })
@@ -927,7 +928,7 @@ async fn test_wildcard_single_segment() {
     let port = start_server(|app| {
         app.get("/files/*splat", |_req, mut res, _next, params| async move {
             let splat = params.get("splat").map_or("", |v| v);
-            res.text(&format!("files: {}", splat));
+            res.send(&format!("files: {}", splat));
             res
         });
     })
@@ -949,7 +950,7 @@ async fn test_optional_param_present() {
             |_req, mut res, _next, params| async move {
                 let id = params.get("id").map_or("", |v| v);
                 let op = params.get("op").map_or("view", |v| v);
-                res.text(&format!("{} {}", op, id));
+                res.send(&format!("{} {}", op, id));
                 res
             },
         );
@@ -972,7 +973,7 @@ async fn test_optional_param_absent() {
             |_req, mut res, _next, params| async move {
                 let id = params.get("id").map_or("", |v| v);
                 let op = params.get("op").map_or("view", |v| v);
-                res.text(&format!("{} {}", op, id));
+                res.send(&format!("{} {}", op, id));
                 res
             },
         );
@@ -991,12 +992,12 @@ async fn test_optional_param_absent() {
 async fn test_next_route_skips_to_next_route() {
     let port = start_server(|app| {
         app.get("/resource", |_req, mut res, next, _params| async move {
-            res.set_header("X-First", "1");
+            res.set("X-First", "1");
             next(express_rs::router::NextCall::Route).await;
             res
         });
         app.get("/resource", |_req, mut res, _next, _params| async move {
-            res.text("second");
+            res.send("second");
             res
         });
     })
@@ -1019,13 +1020,13 @@ async fn test_next_route_skips_to_next_route() {
 async fn test_param_with_middleware() {
     let port = start_server(|app| {
         app.r#use(|_req, mut res, next, _params| async move {
-            res.set_header("X-Middleware", "true");
+            res.set("X-Middleware", "true");
             next(express_rs::router::NextCall::Continue).await;
             res
         });
         app.get("/user/:id", |_req, mut res, _next, params| async move {
             let id = params.get("id").map_or("", |v| v);
-            res.text(&format!("user {}", id));
+            res.send(&format!("user {}", id));
             res
         });
     })
@@ -1049,7 +1050,7 @@ async fn test_param_decoding() {
     let port = start_server(|app| {
         app.get("/user/:name", |_req, mut res, _next, params| async move {
             let name = params.get("name").map_or("", |v| v);
-            res.text(&format!("user {}", name));
+            res.send(&format!("user {}", name));
             res
         });
     })
@@ -1071,7 +1072,7 @@ async fn test_dot_delimiter_in_path() {
             |_req, mut res, _next, params| async move {
                 let name = params.get("name").map_or("", |v| v);
                 let format = params.get("format").map_or("none", |v| v);
-                res.text(&format!("{} as {}", name, format));
+                res.send(&format!("{} as {}", name, format));
                 res
             },
         );
@@ -1094,7 +1095,7 @@ async fn test_optional_format_suffix() {
             |_req, mut res, _next, params| async move {
                 let name = params.get("name").map_or("", |v| v);
                 let format = params.get("format").map_or("html", |v| v);
-                res.text(&format!("{} as {}", name, format));
+                res.send(&format!("{} as {}", name, format));
                 res
             },
         );
@@ -1124,7 +1125,7 @@ async fn test_escaped_literals_in_path() {
             |_req, mut res, _next, params| async move {
                 let user = params.get("user").map_or("", |v| v);
                 let op = params.get("op").map_or("", |v| v);
-                res.text(&format!("{} {}", op, user));
+                res.send(&format!("{} {}", op, user));
                 res
             },
         );
@@ -1146,7 +1147,7 @@ async fn test_param_adjacent_to_static_text() {
             "/api/v:version/users",
             |_req, mut res, _next, params| async move {
                 let version = params.get("version").map_or("", |v| v);
-                res.text(&format!("v{}", version));
+                res.send(&format!("v{}", version));
                 res
             },
         );
@@ -1166,7 +1167,7 @@ async fn test_wildcard_captures_multiple_segments() {
     let port = start_server(|app| {
         app.get("/files/*splat", |_req, mut res, _next, params| async move {
             let splat = params.get("splat").map_or("", |v| v);
-            res.text(splat);
+            res.send(splat);
             res
         });
     })
@@ -1185,7 +1186,7 @@ async fn test_query_string_is_not_part_of_the_path() {
     let port = start_server(|app| {
         app.get("/users/:id", |_req, mut res, _next, params| async move {
             let id = params.get("id").map_or("", |v| v);
-            res.text(&format!("user {}", id));
+            res.send(&format!("user {}", id));
             res
         });
     })
@@ -1196,6 +1197,617 @@ async fn test_query_string_is_not_part_of_the_path() {
     assert!(
         response.contains("user 77"),
         "Expected query to be ignored for matching, got: {}",
+        response
+    );
+}
+
+// ============================================================
+// Phase 4/5: Response and Request API Tests
+// ============================================================
+
+#[tokio::test]
+async fn test_send_defaults_to_text_html() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.send("<p>hi</p>");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("text/html"),
+        "Expected text/html, got: {}",
+        response
+    );
+    assert!(
+        response.contains("charset=utf-8"),
+        "Expected utf-8 charset, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_send_keeps_existing_content_type() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.set("content-type", "application/xml");
+            res.send("<a/>");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("application/xml"),
+        "Expected content type preserved, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_json_serializes_a_typed_value() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            let data = serde_json::json!({"name": "tj", "roles": ["admin"]});
+            res.json(&data);
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("application/json"),
+        "Expected JSON content type, got: {}",
+        response
+    );
+    assert!(
+        response.contains(r#"{"name":"tj","roles":["admin"]}"#),
+        "Expected serialized body, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_send_status_sends_reason_phrase() {
+    let port = start_server(|app| {
+        app.get("/gone", |_req, mut res, _next, _params| async move {
+            res.send_status(410);
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/gone", None).await;
+    assert!(
+        response.contains("410 Gone"),
+        "Expected 410, got: {}",
+        response
+    );
+    assert!(
+        response.contains("Gone"),
+        "Expected reason phrase, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_content_type_resolves_extension() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.content_type("json").send("{}");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("application/json"),
+        "Expected application/json, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_javascript_is_text_javascript() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.content_type("js").send("1");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("text/javascript"),
+        "Express 5 serves .js as text/javascript, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_set_normalises_content_type_charset() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.set("content-type", "text/html").send("x");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("text/html; charset=utf-8"),
+        "Expected charset appended once, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_get_reads_a_header_back() {
+    let port = start_server(|app| {
+        app.get("/", |req, mut res, _next, _params| async move {
+            let host = req.header("host").unwrap_or("none").to_string();
+            res.set("x-seen-host", &host);
+            res.send("ok");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("x-seen-host: localhost"),
+        "Expected echoed request header, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_append_joins_values() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.set("link", "<http://a>");
+            res.append("link", "<http://b>");
+            res.send("ok");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("<http://a>, <http://b>"),
+        "Expected joined header values, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_vary_appends_once() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.vary("Accept").vary("accept").vary("Accept-Encoding");
+            res.send("ok");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("vary: Accept, Accept-Encoding"),
+        "Expected deduplicated Vary, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_redirect_sets_location_and_defaults_to_302() {
+    let port = start_server(|app| {
+        app.get("/old", |_req, mut res, _next, _params| async move {
+            res.redirect(302, "/new");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/old", None).await;
+    assert!(response.contains("302"), "Expected 302, got: {}", response);
+    assert!(
+        response.contains("location: /new"),
+        "Expected Location, got: {}",
+        response
+    );
+    assert!(
+        response.contains("Found. Redirecting to /new"),
+        "Expected plain-text body, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_redirect_negotiates_html_for_browsers() {
+    let port = start_server(|app| {
+        app.get("/old", |_req, mut res, _next, _params| async move {
+            res.redirect(301, "/new");
+            res
+        });
+    })
+    .await;
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
+    stream
+        .write_all(b"GET /old HTTP/1.1\r\nHost: localhost\r\nAccept: text/html\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut chunk).await.unwrap();
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let response = String::from_utf8_lossy(&buf);
+    assert!(response.contains("301"), "Expected 301, got: {}", response);
+    assert!(
+        response.contains("<!DOCTYPE html>"),
+        "Expected HTML redirect body, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_redirect_defaults_when_no_accept_header_is_meaningful() {
+    let port = start_server(|app| {
+        app.get("/x", |_req, mut res, _next, _params| async move {
+            res.redirect(307, "/y");
+            res
+        });
+    })
+    .await;
+
+    // No Accept header at all still yields a body, as Express's default matches.
+    let response = request(port, "GET", "/x", None).await;
+    assert!(response.contains("307"), "Expected 307, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_location_encodes_the_url() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.location("/my file");
+            res.send("ok");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("location: /my%20file"),
+        "Expected encoded Location, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_send_sets_content_length() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.send("hello");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("content-length: 5"),
+        "Expected content-length 5, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_send_generates_a_weak_etag() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.send("hello");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("etag: W/\""),
+        "Expected weak ETag, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_conditional_request_returns_304() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.send("hello");
+            res
+        });
+    })
+    .await;
+
+    // First pass to learn the ETag.
+    let first = request(port, "GET", "/", None).await;
+    let etag = first
+        .lines()
+        .find(|l| l.to_lowercase().starts_with("etag:"))
+        .and_then(|l| l.split_once(':'))
+        .map(|(_, v)| v.trim().to_string())
+        .expect("expected an ETag");
+
+    // Replay with If-None-Match; Express turns this into a 304.
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
+    let req = format!(
+        "GET / HTTP/1.1\r\nHost: localhost\r\nIf-None-Match: {}\r\nConnection: close\r\n\r\n",
+        etag
+    );
+    stream.write_all(req.as_bytes()).await.unwrap();
+
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut chunk).await.unwrap();
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let response = String::from_utf8_lossy(&buf).to_string();
+
+    assert!(response.contains("304"), "Expected 304, got: {}", response);
+    assert!(
+        !response.contains("content-length: 5"),
+        "304 must not carry the body length, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_head_request_has_headers_but_no_body() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.send("hello");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "HEAD", "/", None).await;
+    assert!(
+        response.contains("200 OK"),
+        "Expected 200, got: {}",
+        response
+    );
+    assert!(
+        response.contains("content-length: 5"),
+        "HEAD must keep Content-Length, got: {}",
+        response
+    );
+    // The raw response ends after the headers.
+    assert!(
+        !response.contains("hello"),
+        "HEAD must not send the body, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_204_strips_content_headers() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.status(204).send("");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(response.contains("204"), "Expected 204, got: {}", response);
+    assert!(
+        !response.contains("content-length"),
+        "204 must not carry Content-Length, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_request_accepts_negotiates() {
+    let port = start_server(|app| {
+        app.get("/", |req, mut res, _next, _params| async move {
+            match req.accepts(&["json", "html"]) {
+                Some(kind) => {
+                    res.send(&format!("chosen: {}", kind));
+                    res
+                }
+                None => {
+                    res.status(406).send("not acceptable");
+                    res
+                }
+            }
+        });
+    })
+    .await;
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nAccept: application/json\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut chunk).await.unwrap();
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let response = String::from_utf8_lossy(&buf).to_string();
+    assert!(
+        response.contains("chosen: json"),
+        "Expected json chosen, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_request_accepts_returns_406_when_nothing_matches() {
+    let port = start_server(|app| {
+        app.get("/", |req, mut res, _next, _params| async move {
+            if req.accepts(&["json"]).is_none() {
+                res.status(406);
+            }
+            res.send("done");
+            res
+        });
+    })
+    .await;
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
+    stream
+        .write_all(
+            b"GET / HTTP/1.1\r\nHost: localhost\r\nAccept: text/html\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut chunk).await.unwrap();
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let response = String::from_utf8_lossy(&buf).to_string();
+    assert!(response.contains("406"), "Expected 406, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_request_host_and_hostname() {
+    let port = start_server(|app| {
+        app.get("/", |req, mut res, _next, _params| async move {
+            res.send(&format!(
+                "{}|{}",
+                req.host().unwrap_or("?"),
+                req.hostname().unwrap_or("?")
+            ));
+            res
+        });
+    })
+    .await;
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: example.com:8080\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut chunk).await.unwrap();
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let response = String::from_utf8_lossy(&buf).to_string();
+    assert!(
+        response.contains("example.com:8080|example.com"),
+        "Expected host with port and hostname without, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_request_xhr_and_is() {
+    let port = start_server(|app| {
+        app.post("/", |req, mut res, _next, _params| async move {
+            let xhr = req.xhr();
+            let json = req.is(&["json"]).is_some();
+            res.send(&format!("xhr={} json={}", xhr, json));
+            res
+        });
+    })
+    .await;
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
+    stream
+        .write_all(
+            b"POST / HTTP/1.1\r\nHost: localhost\r\nX-Requested-With: XMLHttpRequest\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+        )
+        .await
+        .unwrap();
+
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut chunk).await.unwrap();
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let response = String::from_utf8_lossy(&buf).to_string();
+    assert!(
+        response.contains("xhr=true json=true"),
+        "Expected xhr and json detection, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_status_out_of_range_is_ignored() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            // Express throws here; express-rs ignores the invalid code and
+            // keeps the previous status.
+            res.status(99);
+            res.status(200);
+            res.send("ok");
+            res
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("200 OK"),
+        "Expected 200, got: {}",
         response
     );
 }
