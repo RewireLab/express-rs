@@ -27,7 +27,7 @@
 //!
 //!     app.get("/", |_req, mut res, _next, _params| async move {
 //!         res.status(200).send("Hello, World!");
-//!         res
+//!         Ok(res)
 //!     });
 //!
 //!     app.listen(3000).await?;
