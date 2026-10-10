@@ -10,7 +10,7 @@ The point of express-rs is to *rewire* an existing idea and learn from the proce
 
 ## Status
 
-**Phase 6: Error middleware** — complete.
+**Phase 7: Body parsing** — complete.
 
 The framework currently provides:
 
@@ -36,6 +36,7 @@ The framework currently provides:
 - **Content types:** extension resolution including Express 5's `text/javascript` for `.js`
 - **Error middleware:** `use_error_handler()`, `next(err)`, and a handler returning `Err` as the equivalent of a rejected promise
 - **Default error response:** 500 with the message, `Content-Security-Policy`, and `nosniff`, mirroring `finalhandler`
+- **Body parsing:** `body::json()`, `body::text()`, `body::urlencoded()` with content-type gating, `gzip`/`deflate`/`br` decompression, charset checks, size limits, and typed errors
 
 ## Quick Start
 
@@ -79,6 +80,7 @@ src/
   path.rs      — Path pattern matcher (params, wildcards, optionals)
   request.rs   — Request wrapper (method, path, headers, body, query)
   response.rs  — Response wrapper (status, headers, body)
+  body.rs      — Body parsing middleware (JSON, text, forms)
   mime.rs      — Content type resolution and charset handling
   etag.rs      — Entity tag generation and comparison
   error.rs     — Error types
@@ -120,6 +122,10 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | **sha1 for ETag** | Express's ETag format is `"<hexlen>-<27 chars of base64 SHA-1>"`; matching it needs a real SHA-1 rather than a stand-in hash. |
 | **`use_error_handler` instead of arity** | Express tells handlers and error handlers apart by `fn.length === 4`. Rust closures cannot be inspected that way, so the distinction lives in the signature: `use_error_handler` takes the error as its first parameter and the compiler enforces it. |
 | **Route layers skipped while an error is pending** | Express's `Router#handle` does `if (layerError) { match = false }`, so only middleware can catch an error. Replicated literally. |
+| **Parsed body behind a lock** | Handlers receive the request behind an `Arc`, so the parsed body lives in an `RwLock<Option<ParsedBody>>`. Parsers store it; handlers clone it out. |
+| **flate2 and brotli for decompression** | body-parser supports `gzip`, `deflate`, and `br` (plus `zstd` on new Node). `flate2` covers the first two from memory, `brotli` the third. |
+| **Decompression capped at limit + 1** | The size limit applies to the decompressed stream, as `raw-body` sees it. Reading is capped so a compression bomb cannot exhaust memory. |
+| **Hand-rolled form nesting** | `serde_urlencoded` stays flat, so extended `a[b]` nesting is a small parser with the same `parameterLimit` and `depth` defaults as `qs`. |
 
 ### Dependencies
 
@@ -134,6 +140,8 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `bytes` | Efficient byte buffers |
 | `serde` / `serde_json` | JSON serialisation for `res.json()` |
 | `sha1` | ETag generation |
+| `flate2` | `gzip` and `deflate` body decompression |
+| `brotli` | `br` body decompression |
 
 ## Compatibility matrix
 
@@ -183,7 +191,10 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `res.cookie()` | ❌ | not implemented |
 | `res.format()` | ❌ | not implemented |
 | `res.sendFile()` | ❌ | not implemented |
-| Body parsing (JSON, form) | ❌ | not implemented |
+| Body parsing (JSON, text, form) | ✅ | `body::json()`, `body::text()`, `body::urlencoded()` |
+| Extended form nesting | ⚠️ | `a[b]` subset, not full `qs` |
+| Raw bodies | ❌ | no raw parser yet |
+| `zstd` content encoding | ❌ | Node-gated in Express, unsupported here |
 | Static files | ❌ | not implemented |
 
 ### Known differences from Express
@@ -208,6 +219,14 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 - Returning `Err` discards any headers the handler had already set. Express keeps a single `res` object for the whole request, so headers set before `next(err)` normally survive — and they still do here, as long as the handler returns `Ok(res)` rather than `Err`. `test_returning_err_loses_headers_set_before_it` pins this behaviour.
 - **Route-scoped error handlers are not supported.** Express's `app.get(path, fn, errFn)` puts every handler in one route whose own dispatch runs error handlers. Here each registration is a separate layer, and a route layer is skipped the moment an error exists — so an error handler must be registered with `use_error_handler`. Supporting the Express shape needs multi-handler routes.
 
+### Known differences in body parsing
+
+- Extended `a[b]` nesting covers objects, arrays, `[]` appends, and numeric indices — not the full `qs` grammar (`charsetSentinel` and `interpretNumericEntities` do not exist here).
+- Only `utf-8`, `iso-8859-1`, and `windows-1252` decode properly; other charsets fall back to lossy UTF-8.
+- The JSON strict-violation message differs from V8's `SyntaxError` text; the status (400) and kind (`entity.parse.failed`) match.
+- The error `kind` (Express's `.type`) is exposed as `kind()` because `type` is a Rust keyword.
+- `verify` receives `(request, bytes, charset)` and returns `Result<(), String>` instead of throwing.
+
 ## Testing
 
 ```bash
@@ -216,8 +235,8 @@ cargo test
 
 Integration tests start a real server on a random port and make actual HTTP requests over TCP.
 
-- 56 unit tests across the path matcher, MIME, ETags, request negotiation, and errors
-- 87 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, and error propagation
+- 81 unit tests across the path matcher, MIME, ETags, request negotiation, errors, and body parsing
+- 111 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, and body parsing
 
 ```bash
 cargo fmt --check   # formatting
