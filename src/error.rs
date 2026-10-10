@@ -28,6 +28,11 @@ pub enum Error {
 pub struct AppError {
     message: String,
     status: Option<u16>,
+    /// Machine-readable category, e.g. `entity.parse.failed`.
+    ///
+    /// Express attaches `.type` to errors from body parsing. The name
+    /// `kind` avoids confusion with the Rust `type` keyword.
+    kind: Option<String>,
 }
 
 impl Error {
@@ -36,6 +41,7 @@ impl Error {
         Error::App(AppError {
             message: message.into(),
             status: None,
+            kind: None,
         })
     }
 
@@ -44,6 +50,16 @@ impl Error {
         Error::App(AppError {
             message: message.into(),
             status: Some(status),
+            kind: None,
+        })
+    }
+
+    /// Create an application error with status, category, and message.
+    pub fn with_kind(status: u16, kind: impl Into<String>, message: impl Into<String>) -> Self {
+        Error::App(AppError {
+            message: message.into(),
+            status: Some(status),
+            kind: Some(kind.into()),
         })
     }
 
@@ -67,6 +83,14 @@ impl Error {
         match self {
             Error::App(e) => e.status.unwrap_or(DEFAULT_STATUS),
             _ => DEFAULT_STATUS,
+        }
+    }
+
+    /// The machine-readable category, if one was set.
+    pub fn kind(&self) -> Option<&str> {
+        match self {
+            Error::App(e) => e.kind.as_deref(),
+            _ => None,
         }
     }
 }
@@ -127,6 +151,14 @@ mod tests {
         let e = Error::with_status(404, "missing");
         assert_eq!(e.message(), "missing");
         assert_eq!(e.status(), 404);
+        assert_eq!(e.kind(), None);
+    }
+
+    #[test]
+    fn application_error_carries_its_kind() {
+        let e = Error::with_kind(400, "entity.parse.failed", "bad json");
+        assert_eq!(e.status(), 400);
+        assert_eq!(e.kind(), Some("entity.parse.failed"));
     }
 
     #[test]
