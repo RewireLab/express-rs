@@ -106,6 +106,14 @@ impl Response {
         self.set(name, &combined)
     }
 
+    /// Remove a response header.
+    pub fn remove_header(&mut self, name: &str) -> &mut Self {
+        if let Ok(name) = HeaderName::from_bytes(name.as_bytes()) {
+            self.headers.remove(name);
+        }
+        self
+    }
+
     /// Set the `Content-Type` from an extension or a full type.
     ///
     /// Aliased as `content_type` to avoid the bare `type` name, which
@@ -359,6 +367,12 @@ impl Response {
     /// Get the response body.
     pub fn get_body(&self) -> Option<&Bytes> {
         self.body.as_ref()
+    }
+
+    /// Set the response body bytes directly, leaving headers untouched.
+    pub fn set_body(&mut self, body: Bytes) -> &mut Self {
+        self.body = Some(body);
+        self
     }
 
     /// Build the default response for an error nothing handled.
