@@ -5,7 +5,11 @@
 
 use bytes::Bytes;
 use http::{HeaderMap, Method, Uri};
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
+use std::sync::RwLock;
+
+use crate::body::ParsedBody;
 
 /// An HTTP request.
 ///
@@ -20,6 +24,13 @@ pub struct Request {
     query: HashMap<String, String>,
     /// Route parameters extracted from the path (e.g., `:id` → `params["id"]`).
     pub params: HashMap<String, String>,
+    /// Body parsed by body-parser middleware, if any ran.
+    ///
+    /// Express sets `req.body` when a parser runs and leaves it
+    /// `undefined` otherwise. The lock holds `None` until a parser
+    /// stores a value. Interior mutability is required because handlers
+    /// receive the request behind an `Arc`.
+    parsed: RwLock<Option<ParsedBody>>,
 }
 
 impl Request {
@@ -33,6 +44,7 @@ impl Request {
             body,
             query,
             params: HashMap::new(),
+            parsed: RwLock::new(None),
         }
     }
 
@@ -95,6 +107,45 @@ impl Request {
     /// Get a route parameter by name.
     pub fn param(&self, name: &str) -> Option<&str> {
         self.params.get(name).map(|s| s.as_str())
+    }
+
+    /// Store a parsed body, as body-parser middleware does.
+    pub fn set_parsed_body(&self, body: ParsedBody) {
+        *self.parsed.write().unwrap() = Some(body);
+    }
+
+    /// The parsed body, if a parser ran and the content type matched.
+    ///
+    /// Returns `None` when no parser ran, the content type did not match,
+    /// or the request carried no body — the equivalent of Express's
+    /// `req.body` being `undefined`.
+    pub fn parsed_body(&self) -> Option<ParsedBody> {
+        self.parsed.read().unwrap().clone()
+    }
+
+    /// Deserialize a parsed JSON body into `T`.
+    ///
+    /// Returns `None` when no JSON body was parsed. Returns `Some(Err(..))`
+    /// when the value does not fit `T`.
+    pub fn body_json<T: DeserializeOwned>(&self) -> Option<Result<T, serde_json::Error>> {
+        match self.parsed.read().unwrap().as_ref()? {
+            ParsedBody::Json(value) => Some(serde_json::from_value(value.clone())),
+            _ => None,
+        }
+    }
+
+    /// True when the request carries a body.
+    ///
+    /// Mirrors `type-is`'s `hasBody`: a `Transfer-Encoding` header means a
+    /// body may follow, otherwise `Content-Length` must exceed zero.
+    pub fn has_body(&self) -> bool {
+        if self.headers.contains_key(http::header::TRANSFER_ENCODING) {
+            return true;
+        }
+        self.header("content-length")
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(|n| n > 0)
+            .unwrap_or(false)
     }
 
     /// Pick the best match from the offered types against `Accept`.
