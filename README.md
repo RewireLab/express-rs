@@ -10,7 +10,7 @@ The point of express-rs is to *rewire* an existing idea and learn from the proce
 
 ## Status
 
-**Phase 7: Body parsing** — complete.
+**Phase 8: Static files** — complete.
 
 The framework currently provides:
 
@@ -37,6 +37,7 @@ The framework currently provides:
 - **Error middleware:** `use_error_handler()`, `next(err)`, and a handler returning `Err` as the equivalent of a rejected promise
 - **Default error response:** 500 with the message, `Content-Security-Policy`, and `nosniff`, mirroring `finalhandler`
 - **Body parsing:** `body::json()`, `body::text()`, `body::urlencoded()` with content-type gating, `gzip`/`deflate`/`br` decompression, charset checks, size limits, and typed errors
+- **Static files:** `static_files::serve_static()` and `serve_static_at()` with content types, `ETag`/`Last-Modified` caching, conditional requests, single ranges, index files, and trailing-slash redirects
 
 ## Quick Start
 
@@ -48,11 +49,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new();
 
     app.get("/", |_req, mut res, _next, _params| async move {
-        res.status(200).text("Hello, World!");
-        res
+        res.status(200).send("Hello, World!");
+        Ok(res)
     });
 
-    app.get("/user/:id", |_req, res, _next, params| async move {
+    app.get("/user/:id", |_req, mut res, _next, params| async move {
         let id = params.get("id").map_or("", |v| v);
         res.send(&format!("user {}", id));
         Ok(res)
@@ -81,6 +82,7 @@ src/
   request.rs   — Request wrapper (method, path, headers, body, query)
   response.rs  — Response wrapper (status, headers, body)
   body.rs      — Body parsing middleware (JSON, text, forms)
+  static_files.rs — Static file middleware (serve-static equivalent)
   mime.rs      — Content type resolution and charset handling
   etag.rs      — Entity tag generation and comparison
   error.rs     — Error types
@@ -126,6 +128,9 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | **flate2 and brotli for decompression** | body-parser supports `gzip`, `deflate`, and `br` (plus `zstd` on new Node). `flate2` covers the first two from memory, `brotli` the third. |
 | **Decompression capped at limit + 1** | The size limit applies to the decompressed stream, as `raw-body` sees it. Reading is capped so a compression bomb cannot exhaust memory. |
 | **Hand-rolled form nesting** | `serde_urlencoded` stays flat, so extended `a[b]` nesting is a small parser with the same `parameterLimit` and `depth` defaults as `qs`. |
+| **Canonical confinement for static files** | `send` checks `..` lexically and follows symlinks wherever they lead. Paths here are canonicalized and must stay under the root, so a symlink escape answers 404. |
+| **Stat-based weak ETags for files** | `send` tags the stat result instead of hashing content, so large files never pay for a digest. Same shape here: `W/"<hexlen>-<hexmtime>"`. |
+| **`max_age_secs` in seconds** | Express accepts milliseconds or strings like `"1d"`. Seconds as `u64` need no string parser and no float clamping. |
 
 ### Dependencies
 
@@ -142,6 +147,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `sha1` | ETag generation |
 | `flate2` | `gzip` and `deflate` body decompression |
 | `brotli` | `br` body decompression |
+| `httpdate` | `Last-Modified` formatting and `If-Modified-Since` parsing |
 
 ## Compatibility matrix
 
@@ -195,7 +201,10 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | Extended form nesting | ⚠️ | `a[b]` subset, not full `qs` |
 | Raw bodies | ❌ | no raw parser yet |
 | `zstd` content encoding | ❌ | Node-gated in Express, unsupported here |
-| Static files | ❌ | not implemented |
+| Static files | ✅ | `static_files::serve_static()` / `serve_static_at()` |
+| Dotfile policy | ✅ | ignore (default), allow, deny |
+| Directory index + redirect | ✅ | `index.html` default, 301 to trailing slash |
+| Static conditional + range | ✅ | ETag/date freshness, single ranges, 206/304/412/416 |
 
 ### Known differences from Express
 
@@ -227,6 +236,15 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 - The error `kind` (Express's `.type`) is exposed as `kind()` because `type` is a Rust keyword.
 - `verify` receives `(request, bytes, charset)` and returns `Result<(), String>` instead of throwing.
 
+### Known differences in static files
+
+- Symlink escapes answer 404. `send` follows symlinks outside the root; this confinement is stricter on purpose.
+- Files are read fully into memory rather than streamed. Large files pay for one allocation per request.
+- The 416 answer carries no `Content-Range` header and the error page shape follows the default error handler (plain text), not `send`'s HTML document.
+- `If-Modified-Since` compares at whole-second precision.
+- `max_age_secs` takes seconds; Express takes milliseconds or duration strings.
+- Extension fallback (`extensions` option) is implemented. Directory listing was never part of `serve-static` and is not implemented either.
+
 ## Testing
 
 ```bash
@@ -235,8 +253,8 @@ cargo test
 
 Integration tests start a real server on a random port and make actual HTTP requests over TCP.
 
-- 81 unit tests across the path matcher, MIME, ETags, request negotiation, errors, and body parsing
-- 111 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, and body parsing
+- 89 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, and static helpers
+- 131 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing, and static files
 
 ```bash
 cargo fmt --check   # formatting
