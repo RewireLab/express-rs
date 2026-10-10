@@ -2368,3 +2368,858 @@ async fn test_rejected_promise_equivalent_is_forwarded() {
         response
     );
 }
+
+// ============================================================
+// Phase 7: Body Parsing Tests
+// ============================================================
+
+/// Send a request with extra headers and a raw byte body.
+async fn request_raw(
+    port: u16,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+) -> String {
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
+    let mut req = format!(
+        "{} {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n",
+        method, path
+    );
+    for (k, v) in headers {
+        req.push_str(&format!("{}: {}\r\n", k, v));
+    }
+    if let Some(b) = body {
+        req.push_str(&format!("Content-Length: {}\r\n", b.len()));
+        req.push_str("\r\n");
+        stream.write_all(req.as_bytes()).await.unwrap();
+        stream.write_all(b).await.unwrap();
+    } else {
+        req.push_str("\r\n");
+        stream.write_all(req.as_bytes()).await.unwrap();
+    }
+
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut chunk).await.unwrap();
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    String::from_utf8_lossy(&buf).to_string()
+}
+
+fn gzip(data: &[u8]) -> Vec<u8> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(data).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn zlib(data: &[u8]) -> Vec<u8> {
+    use flate2::write::ZlibEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(data).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn brotli(data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+
+    let mut buf = Vec::new();
+    {
+        let mut writer = brotli::CompressorWriter::new(&mut buf, 4096, 11, 22);
+        writer.write_all(data).unwrap();
+        writer.flush().unwrap();
+    }
+    buf
+}
+
+#[tokio::test]
+async fn test_json_body_is_parsed() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(Default::default()));
+        app.post("/user", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Json(v)) => {
+                    res.send(&format!("name={}", v["name"].as_str().unwrap_or("?")));
+                    Ok(res)
+                }
+                _ => {
+                    res.send("no json body");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/user",
+        &[("Content-Type", "application/json")],
+        Some(br#"{"name":"tj"}"#),
+    )
+    .await;
+    assert!(
+        response.contains("name=tj"),
+        "Expected parsed JSON, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_json_typed_deserialization() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(Default::default()));
+        app.post("/login", |req, mut res, _next, _params| async move {
+            #[derive(serde::Deserialize)]
+            struct Login {
+                user: String,
+            }
+            match req.body_json::<Login>() {
+                Some(Ok(login)) => {
+                    res.send(&format!("hello {}", login.user));
+                    Ok(res)
+                }
+                _ => {
+                    res.send("bad login");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/login",
+        &[("Content-Type", "application/json")],
+        Some(br#"{"user":"tobi"}"#),
+    )
+    .await;
+    assert!(
+        response.contains("hello tobi"),
+        "Expected typed JSON, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_json_strict_rejects_primitives() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(Default::default()));
+        app.post("/", |_req, mut res, _next, _params| async move {
+            res.send("parsed");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "application/json")],
+        Some(b"42"),
+    )
+    .await;
+    assert!(response.contains("400"), "Expected 400, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_json_non_strict_accepts_primitives() {
+    let port = start_server(|app| {
+        let mut options = express_rs::body::JsonOptions::default();
+        options.strict = false;
+        app.r#use(express_rs::body::json(options));
+        app.post("/", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Json(v)) => {
+                    res.send(&format!("value={}", v));
+                    Ok(res)
+                }
+                _ => {
+                    res.send("none");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "application/json")],
+        Some(b"42"),
+    )
+    .await;
+    assert!(
+        response.contains("value=42"),
+        "Expected primitive JSON, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_json_malformed_is_a_400_with_kind() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(Default::default()));
+        app.post("/", |_req, mut res, _next, _params| async move {
+            res.send("parsed");
+            Ok(res)
+        });
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.status(err.status());
+            res.send(&format!("{}:{}", err.status(), err.kind().unwrap_or("?")));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "application/json")],
+        Some(b"{oops"),
+    )
+    .await;
+    assert!(response.contains("400"), "Expected 400, got: {}", response);
+    assert!(
+        response.contains("entity.parse.failed"),
+        "Expected the error kind, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_json_skipped_for_other_content_types() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(Default::default()));
+        app.post("/", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(_) => {
+                    res.send("parsed");
+                    Ok(res)
+                }
+                None => {
+                    res.send("skipped");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "text/plain")],
+        Some(b"{}"),
+    )
+    .await;
+    assert!(
+        response.contains("skipped"),
+        "Expected the parser to skip, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_json_skipped_without_body() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(Default::default()));
+        app.post("/", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(_) => {
+                    res.send("parsed");
+                    Ok(res)
+                }
+                None => {
+                    res.send("no body");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "application/json")],
+        None,
+    )
+    .await;
+    assert!(
+        response.contains("no body"),
+        "Expected skip without body, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_json_limit_is_a_413() {
+    let port = start_server(|app| {
+        let mut options = express_rs::body::JsonOptions::default();
+        options.limit = 4;
+        app.r#use(express_rs::body::json(options));
+        app.post("/", |_req, mut res, _next, _params| async move {
+            res.send("parsed");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "application/json")],
+        Some(br#"{"a":12345}"#),
+    )
+    .await;
+    assert!(response.contains("413"), "Expected 413, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_json_gzip_body_is_decompressed() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(Default::default()));
+        app.post("/", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Json(v)) => {
+                    res.send(&format!("a={}", v["a"]));
+                    Ok(res)
+                }
+                _ => {
+                    res.send("none");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let compressed = gzip(br#"{"a":1}"#);
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[
+            ("Content-Type", "application/json"),
+            ("Content-Encoding", "gzip"),
+        ],
+        Some(&compressed),
+    )
+    .await;
+    assert!(
+        response.contains("a=1"),
+        "Expected decompressed JSON, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_json_deflate_body_is_decompressed() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(Default::default()));
+        app.post("/", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Json(v)) => {
+                    res.send(&format!("a={}", v["a"]));
+                    Ok(res)
+                }
+                _ => {
+                    res.send("none");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let compressed = zlib(br#"{"a":2}"#);
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[
+            ("Content-Type", "application/json"),
+            ("Content-Encoding", "deflate"),
+        ],
+        Some(&compressed),
+    )
+    .await;
+    assert!(
+        response.contains("a=2"),
+        "Expected decompressed JSON, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_json_brotli_body_is_decompressed() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(Default::default()));
+        app.post("/", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Json(v)) => {
+                    res.send(&format!("a={}", v["a"]));
+                    Ok(res)
+                }
+                _ => {
+                    res.send("none");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let compressed = brotli(br#"{"a":3}"#);
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[
+            ("Content-Type", "application/json"),
+            ("Content-Encoding", "br"),
+        ],
+        Some(&compressed),
+    )
+    .await;
+    assert!(
+        response.contains("a=3"),
+        "Expected decompressed JSON, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_unknown_content_encoding_is_a_415() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(Default::default()));
+        app.post("/", |_req, mut res, _next, _params| async move {
+            res.send("parsed");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[
+            ("Content-Type", "application/json"),
+            ("Content-Encoding", "compress"),
+        ],
+        Some(b"{}"),
+    )
+    .await;
+    assert!(response.contains("415"), "Expected 415, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_inflate_false_rejects_encoded_bodies() {
+    let port = start_server(|app| {
+        let mut options = express_rs::body::JsonOptions::default();
+        options.inflate = false;
+        app.r#use(express_rs::body::json(options));
+        app.post("/", |_req, mut res, _next, _params| async move {
+            res.send("parsed");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let compressed = gzip(b"{}");
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[
+            ("Content-Type", "application/json"),
+            ("Content-Encoding", "gzip"),
+        ],
+        Some(&compressed),
+    )
+    .await;
+    assert!(response.contains("415"), "Expected 415, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_json_rejects_non_utf_charset() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(Default::default()));
+        app.post("/", |_req, mut res, _next, _params| async move {
+            res.send("parsed");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "application/json; charset=iso-8859-1")],
+        Some(b"{}"),
+    )
+    .await;
+    assert!(response.contains("415"), "Expected 415, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_text_body_is_parsed() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::text(Default::default()));
+        app.post("/", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Text(t)) => {
+                    res.send(&format!("text={}", t));
+                    Ok(res)
+                }
+                _ => {
+                    res.send("none");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "text/plain")],
+        Some("hello world".as_bytes()),
+    )
+    .await;
+    assert!(
+        response.contains("text=hello world"),
+        "Expected text body, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_text_custom_type_option() {
+    let port = start_server(|app| {
+        let mut options = express_rs::body::TextOptions::default();
+        options.types = vec!["text/csv".to_string()];
+        app.r#use(express_rs::body::text(options));
+        app.post("/", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Text(t)) => {
+                    res.send(&format!("csv={}", t));
+                    Ok(res)
+                }
+                _ => {
+                    res.send("none");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "text/csv")],
+        Some("a,b,c".as_bytes()),
+    )
+    .await;
+    assert!(
+        response.contains("csv=a,b,c"),
+        "Expected CSV body, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_form_simple_pairs() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::urlencoded(Default::default()));
+        app.post("/", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Form(v)) => {
+                    let name = v["name"].as_str().unwrap_or("?");
+                    let age = v["age"].as_str().unwrap_or("?");
+                    res.send(&format!("{}:{}", name, age));
+                    Ok(res)
+                }
+                _ => {
+                    res.send("none");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        Some("name=tj&age=30".as_bytes()),
+    )
+    .await;
+    assert!(
+        response.contains("tj:30"),
+        "Expected form values, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_form_repeated_keys_become_arrays() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::urlencoded(Default::default()));
+        app.post("/", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Form(v)) => {
+                    res.send(&format!(
+                        "n={}",
+                        v["tag"].as_array().map(|a| a.len()).unwrap_or(0)
+                    ));
+                    Ok(res)
+                }
+                _ => {
+                    res.send("none");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        Some("tag=a&tag=b&tag=c".as_bytes()),
+    )
+    .await;
+    assert!(
+        response.contains("n=3"),
+        "Expected array of three, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_form_extended_nests_brackets() {
+    let port = start_server(|app| {
+        let mut options = express_rs::body::FormOptions::default();
+        options.extended = true;
+        app.r#use(express_rs::body::urlencoded(options));
+        app.post("/", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Form(v)) => {
+                    res.send(&format!(
+                        "city={}",
+                        v["user"]["address"]["city"].as_str().unwrap_or("?")
+                    ));
+                    Ok(res)
+                }
+                _ => {
+                    res.send("none");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        Some("user[address][city]=SF".as_bytes()),
+    )
+    .await;
+    assert!(
+        response.contains("city=SF"),
+        "Expected nested form, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_form_too_many_parameters_is_a_413() {
+    let port = start_server(|app| {
+        let mut options = express_rs::body::FormOptions::default();
+        options.parameter_limit = 2;
+        app.r#use(express_rs::body::urlencoded(options));
+        app.post("/", |_req, mut res, _next, _params| async move {
+            res.send("parsed");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        Some("a=1&b=2&c=3".as_bytes()),
+    )
+    .await;
+    assert!(response.contains("413"), "Expected 413, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_form_depth_overflow_is_a_400() {
+    let port = start_server(|app| {
+        let mut options = express_rs::body::FormOptions::default();
+        options.extended = true;
+        options.depth = 1;
+        app.r#use(express_rs::body::urlencoded(options));
+        app.post("/", |_req, mut res, _next, _params| async move {
+            res.send("parsed");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        Some("a[b][c]=1".as_bytes()),
+    )
+    .await;
+    assert!(response.contains("400"), "Expected 400, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_verify_failure_is_a_403() {
+    let port = start_server(|app| {
+        let mut options = express_rs::body::JsonOptions::default();
+        options.verify = Some(std::sync::Arc::new(|_, _, _| Err("reject".to_string())));
+        app.r#use(express_rs::body::json(options));
+        app.post("/", |_req, mut res, _next, _params| async move {
+            res.send("parsed");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "application/json")],
+        Some(b"{}"),
+    )
+    .await;
+    assert!(response.contains("403"), "Expected 403, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_custom_type_option_matches_vendor_json() {
+    let port = start_server(|app| {
+        let mut options = express_rs::body::JsonOptions::default();
+        options.types = vec!["application/vnd.api+json".to_string()];
+        app.r#use(express_rs::body::json(options));
+        app.post("/", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Json(v)) => {
+                    res.send(&format!("t={}", v["type"].as_str().unwrap_or("?")));
+                    Ok(res)
+                }
+                _ => {
+                    res.send("none");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[("Content-Type", "application/vnd.api+json")],
+        Some(br#"{"type":"user"}"#),
+    )
+    .await;
+    assert!(
+        response.contains("t=user"),
+        "Expected vendor JSON parsed, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_parsers_compose_with_routing_and_errors() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(Default::default()));
+        app.post("/items/:id", |req, mut res, _next, params| async move {
+            let id = params.get("id").map_or("", |v| v).to_string();
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Json(v)) => {
+                    res.send(&format!("{}:{}", id, v["q"]));
+                    Ok(res)
+                }
+                _ => Err(express_rs::Error::with_status(400, "need json")),
+            }
+        });
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.status(err.status());
+            res.send(&err.message());
+            Ok(res)
+        });
+    })
+    .await;
+
+    let ok = request_raw(
+        port,
+        "POST",
+        "/items/7",
+        &[("Content-Type", "application/json")],
+        Some(br#"{"q":1}"#),
+    )
+    .await;
+    assert!(ok.contains("7:1"), "Expected routed JSON, got: {}", ok);
+
+    let missing = request_raw(port, "POST", "/items/7", &[], Some(b"{}")).await;
+    assert!(
+        missing.contains("400"),
+        "Expected 400 without JSON, got: {}",
+        missing
+    );
+    assert!(
+        missing.contains("need json"),
+        "Expected error message, got: {}",
+        missing
+    );
+}
