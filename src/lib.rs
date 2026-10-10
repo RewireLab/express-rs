@@ -45,6 +45,7 @@ pub mod request;
 pub mod response;
 pub mod router;
 pub mod server;
+pub mod static_files;
 
 pub use app::App;
 pub use error::Error;

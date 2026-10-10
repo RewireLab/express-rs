@@ -3223,3 +3223,541 @@ async fn test_parsers_compose_with_routing_and_errors() {
         missing
     );
 }
+
+// ============================================================
+// Phase 8: Static File Tests
+// ============================================================
+
+/// Build a fixture tree and return its root.
+fn fixture_root(tag: &str) -> std::path::PathBuf {
+    let dir =
+        std::env::temp_dir().join(format!("express-rs-static-{}-{}", tag, std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("docs")).unwrap();
+    std::fs::write(dir.join("hello.txt"), "hello static").unwrap();
+    std::fs::write(dir.join("data.json"), r#"{"a":1}"#).unwrap();
+    std::fs::write(dir.join(".hidden"), "secret").unwrap();
+    std::fs::write(dir.join("docs").join("index.html"), "<h1>docs</h1>").unwrap();
+    std::fs::write(dir.join("docs").join("note.txt"), "nested note").unwrap();
+    dir
+}
+
+fn serve_at(
+    app: &mut express_rs::App,
+    mount: &str,
+    root: std::path::PathBuf,
+    options: express_rs::static_files::StaticOptions,
+) {
+    app.r#use(express_rs::static_files::serve_static_at(
+        mount, root, options,
+    ));
+}
+
+#[tokio::test]
+async fn test_static_serves_a_file() {
+    let root = fixture_root("basic");
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/static/hello.txt", None).await;
+    assert!(
+        response.contains("200 OK"),
+        "Expected 200, got: {}",
+        response
+    );
+    assert!(
+        response.contains("hello static"),
+        "Expected body, got: {}",
+        response
+    );
+    assert!(
+        response.contains("text/plain"),
+        "Expected text/plain, got: {}",
+        response
+    );
+    assert!(
+        response.contains("accept-ranges: bytes"),
+        "Expected Accept-Ranges, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_json_content_type() {
+    let root = fixture_root("json");
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/static/data.json", None).await;
+    assert!(
+        response.contains("application/json"),
+        "Expected JSON type, got: {}",
+        response
+    );
+    assert!(
+        response.contains(r#"{"a":1}"#),
+        "Expected body, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_cache_headers() {
+    let root = fixture_root("cache");
+    let port = start_server(move |app| {
+        let mut options = express_rs::static_files::StaticOptions::with_index();
+        options.max_age_secs = 3600;
+        options.immutable = true;
+        serve_at(app, "/static", root.clone(), options);
+    })
+    .await;
+
+    let response = request(port, "GET", "/static/hello.txt", None).await;
+    assert!(
+        response.contains("cache-control: public, max-age=3600, immutable"),
+        "Expected Cache-Control, got: {}",
+        response
+    );
+    assert!(
+        response.contains("etag: W/\""),
+        "Expected weak ETag, got: {}",
+        response
+    );
+    assert!(
+        response.contains("last-modified:"),
+        "Expected Last-Modified, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_missing_falls_through() {
+    let root = fixture_root("fallthrough");
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+        app.get(
+            "/static/missing.txt",
+            |_req, mut res, _next, _params| async move {
+                res.send("fallback");
+                Ok(res)
+            },
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/static/missing.txt", None).await;
+    assert!(
+        response.contains("fallback"),
+        "Expected fallthrough, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_missing_no_fallthrough_is_404() {
+    let root = fixture_root("no-fallthrough");
+    let port = start_server(move |app| {
+        let mut options = express_rs::static_files::StaticOptions::with_index();
+        options.fallthrough = false;
+        serve_at(app, "/static", root.clone(), options);
+    })
+    .await;
+
+    let response = request(port, "GET", "/static/missing.txt", None).await;
+    assert!(response.contains("404"), "Expected 404, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_static_traversal_is_403() {
+    let root = fixture_root("traversal");
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/static/%2e%2e/hello.txt", None).await;
+    assert!(response.contains("403"), "Expected 403, got: {}", response);
+    assert!(
+        !response.contains("hello static"),
+        "Must not serve outside root, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_dotfile_ignored_by_default() {
+    let root = fixture_root("dotfile");
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+        app.get(
+            "/static/.hidden",
+            |_req, mut res, _next, _params| async move {
+                res.send("fallback");
+                Ok(res)
+            },
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/static/.hidden", None).await;
+    assert!(
+        response.contains("fallback"),
+        "Expected ignore fallthrough, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("secret"),
+        "Must not serve dotfile, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_dotfile_allowed() {
+    let root = fixture_root("dotfile-allow");
+    let port = start_server(move |app| {
+        let mut options = express_rs::static_files::StaticOptions::with_index();
+        options.dotfiles = express_rs::static_files::Dotfiles::Allow;
+        serve_at(app, "/static", root.clone(), options);
+    })
+    .await;
+
+    let response = request(port, "GET", "/static/.hidden", None).await;
+    assert!(
+        response.contains("secret"),
+        "Expected dotfile body, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_dotfile_denied_is_403() {
+    let root = fixture_root("dotfile-deny");
+    let port = start_server(move |app| {
+        let mut options = express_rs::static_files::StaticOptions::with_index();
+        options.dotfiles = express_rs::static_files::Dotfiles::Deny;
+        serve_at(app, "/static", root.clone(), options);
+    })
+    .await;
+
+    let response = request(port, "GET", "/static/.hidden", None).await;
+    assert!(response.contains("403"), "Expected 403, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_static_directory_serves_index() {
+    let root = fixture_root("index");
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/static/docs/", None).await;
+    assert!(
+        response.contains("<h1>docs</h1>"),
+        "Expected index, got: {}",
+        response
+    );
+    assert!(
+        response.contains("text/html"),
+        "Expected HTML type, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_directory_redirects_to_slash() {
+    let root = fixture_root("redirect");
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/static/docs", None).await;
+    assert!(response.contains("301"), "Expected 301, got: {}", response);
+    assert!(
+        response.contains("location: /static/docs/"),
+        "Expected Location, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_directory_no_redirect_falls_through() {
+    let root = fixture_root("no-redirect");
+    let port = start_server(move |app| {
+        let mut options = express_rs::static_files::StaticOptions::with_index();
+        options.redirect = false;
+        serve_at(app, "/static", root.clone(), options);
+        app.get("/static/docs", |_req, mut res, _next, _params| async move {
+            res.send("fallback");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/static/docs", None).await;
+    assert!(
+        response.contains("fallback"),
+        "Expected fallthrough, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_conditional_returns_304() {
+    let root = fixture_root("fresh");
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+    })
+    .await;
+
+    let first = request(port, "GET", "/static/hello.txt", None).await;
+    let etag = first
+        .lines()
+        .find(|l| l.to_lowercase().starts_with("etag:"))
+        .and_then(|l| l.split_once(':'))
+        .map(|(_, v)| v.trim().to_string())
+        .expect("expected an ETag");
+
+    let response = request_raw(
+        port,
+        "GET",
+        "/static/hello.txt",
+        &[("If-None-Match", &etag)],
+        None,
+    )
+    .await;
+    assert!(response.contains("304"), "Expected 304, got: {}", response);
+    assert!(
+        !response.contains("hello static"),
+        "304 must not carry a body, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_range_returns_206() {
+    let root = fixture_root("range");
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "GET",
+        "/static/hello.txt",
+        &[("Range", "bytes=0-4")],
+        None,
+    )
+    .await;
+    assert!(response.contains("206"), "Expected 206, got: {}", response);
+    assert!(
+        response.contains("content-range: bytes 0-4/12"),
+        "Expected Content-Range, got: {}",
+        response
+    );
+    assert!(
+        response.ends_with("hello"),
+        "Expected partial body, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_bad_range_is_416() {
+    let root = fixture_root("range-416");
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "GET",
+        "/static/hello.txt",
+        &[("Range", "bytes=99-")],
+        None,
+    )
+    .await;
+    assert!(response.contains("416"), "Expected 416, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_static_post_falls_through() {
+    let root = fixture_root("post");
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+        app.post(
+            "/static/hello.txt",
+            |_req, mut res, _next, _params| async move {
+                res.send("posted");
+                Ok(res)
+            },
+        );
+    })
+    .await;
+
+    let response = request(port, "POST", "/static/hello.txt", Some("")).await;
+    assert!(
+        response.contains("posted"),
+        "Expected POST to skip static, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_post_no_fallthrough_is_405() {
+    let root = fixture_root("post-405");
+    let port = start_server(move |app| {
+        let mut options = express_rs::static_files::StaticOptions::with_index();
+        options.fallthrough = false;
+        serve_at(app, "/static", root.clone(), options);
+    })
+    .await;
+
+    let response = request(port, "POST", "/static/hello.txt", Some("")).await;
+    assert!(response.contains("405"), "Expected 405, got: {}", response);
+    assert!(
+        response.contains("allow: GET, HEAD"),
+        "Expected Allow, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_outside_mount_falls_through() {
+    let root = fixture_root("mount");
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+        app.get("/other", |_req, mut res, _next, _params| async move {
+            res.send("other");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/other", None).await;
+    assert!(
+        response.contains("other"),
+        "Expected other route, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_mount_boundary_is_exact() {
+    let root = fixture_root("boundary");
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+        app.get(
+            "/staticfiles/x",
+            |_req, mut res, _next, _params| async move {
+                res.send("not static");
+                Ok(res)
+            },
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/staticfiles/x", None).await;
+    assert!(
+        response.contains("not static"),
+        "Expected boundary respect, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_static_symlink_escape_is_blocked() {
+    let root = fixture_root("symlink");
+    let outside = root.parent().unwrap().join("outside-secret.txt");
+    std::fs::write(&outside, "TOP-SECRET").unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("evil.txt")).unwrap();
+    let port = start_server(move |app| {
+        serve_at(
+            app,
+            "/static",
+            root.clone(),
+            express_rs::static_files::StaticOptions::with_index(),
+        );
+    })
+    .await;
+
+    let response = request(port, "GET", "/static/evil.txt", None).await;
+    assert!(
+        !response.contains("TOP-SECRET"),
+        "Must not serve outside root, got: {}",
+        response
+    );
+}
