@@ -10,7 +10,7 @@ The point of express-rs is to *rewire* an existing idea and learn from the proce
 
 ## Status
 
-**Phase 14: Parameter callbacks** — complete.
+**Phase 15: Route-scoped error handlers** — complete.
 
 The framework currently provides:
 
@@ -43,6 +43,7 @@ The framework currently provides:
 - **Content negotiation:** `response::format()` picks a body by `Accept`, with extension keys, a default fallback, `Vary: Accept`, and 406 when nothing matches
 - **Raw bodies:** `body::raw()` stores the undecoded bytes behind content-type gating, size limits, and inflation
 - **Parameter callbacks:** `app.param()` runs before any matched layer binding that name, at most once per request
+- **Route-scoped error handlers:** `app.get_with_error()` and friends pair a handler with its own error handler
 
 ## Quick Start
 
@@ -145,6 +146,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | **Manual `Default` for option structs** | A derived `Default` zeroed every flag once already (`StaticOptions` in the static-files phase); `SendFileOptions` carries a hand-written impl so the send defaults — ETag, freshness, ranges, cache-control all on — survive. |
 | **`format()` is a free function** | It must read the request's `Accept` header, and a `Response` method cannot see the request — the same reason finalisation lives in the server. `response::format(&req, res, |f| ...)`. |
 | **Parameter callbacks dispatched, not layered** | `app.param()` callbacks are not stack layers; the router consults the registry when a layer's bound params name one, then runs the callback inline before that layer's handlers — which is how a callback registered after a route still applies, and how the once-per-request cache works. |
+| **Route-scoped error handlers as paired arguments** | Express tells handlers and error handlers apart by arity inside one route's stack. Rust closures expose no arity, so the pairing is explicit: `get_with_error(path, handler, err_handler)` puts both on one layer, and the route's dispatch gives its own handler's failure to its error handler before any global one. |
 
 ### Dependencies
 
@@ -193,7 +195,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `res.status()` validation | ⚠️ | out-of-range codes ignored, not thrown |
 | `next(err)` → error middleware | ✅ | `NextCall::Error` or a returned `Err` |
 | Error middleware arity | ⚠️ | `use_error_handler()`, not `fn.length === 4` |
-| Route-scoped error handlers | ❌ | needs multi-handler routes |
+| Route-scoped error handlers | ✅ | `get_with_error` etc.; one handler + one error handler |
 | Rejected promise → error handler | ✅ | a handler returning `Err` |
 | Default 500 on unhandled error | ✅ | message plus CSP and `nosniff` |
 | Weak ETag on `send()` | ✅ | matches the `etag` package format |
@@ -244,7 +246,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 - Error middleware is registered with `use_error_handler()` and takes the error as its first argument. Express infers this from `fn.length === 4`, which Rust closures cannot expose.
 - The error is passed **by value**, since a borrowed reference cannot be captured by an `async` block.
 - Returning `Err` discards any headers the handler had already set. Express keeps a single `res` object for the whole request, so headers set before `next(err)` normally survive — and they still do here, as long as the handler returns `Ok(res)` rather than `Err`. `test_returning_err_loses_headers_set_before_it` pins this behaviour.
-- **Route-scoped error handlers are not supported.** Express's `app.get(path, fn, errFn)` puts every handler in one route whose own dispatch runs error handlers. Here each registration is a separate layer, and a route layer is skipped the moment an error exists — so an error handler must be registered with `use_error_handler`. Supporting the Express shape needs multi-handler routes.
+- **Route-scoped error handlers cover one handler each.** `app.get(path, fn, errFn)` pairs the two explicitly: `get_with_error(path, fn, errFn)`. Express chains N handlers followed by error handlers in one route; here a route carries exactly one of each. An error raised outside the route still skips the whole layer, reaching ordinary error middleware — the router's skip rule, unchanged from Express.
 
 ### Known differences in body parsing
 
@@ -307,7 +309,7 @@ cargo test
 Integration tests start a real server on a random port and make actual HTTP requests over TCP.
 
 - 117 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, cookies, content disposition, and type normalisation
-- 163 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing (including raw), static files, cookies, file sending, content negotiation, and parameter callbacks
+- 166 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing (including raw), static files, cookies, file sending, content negotiation, parameter callbacks, and route-scoped errors
 
 ```bash
 cargo fmt --check   # formatting
