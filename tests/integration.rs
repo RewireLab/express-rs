@@ -4741,3 +4741,96 @@ async fn test_format_without_accept_header_picks_first_offered() {
         response
     );
 }
+
+// ============================================================
+// Phase 12: Raw Body Tests
+// ============================================================
+
+#[tokio::test]
+async fn test_raw_parser_stores_bytes() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::raw(express_rs::body::RawOptions::default()));
+        app.post("/echo", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Raw(bytes)) => {
+                    res.send(&String::from_utf8_lossy(&bytes));
+                }
+                _ => {
+                    res.send("none");
+                }
+            }
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/echo",
+        &[("Content-Type", "application/octet-stream")],
+        Some(b"raw bytes!"),
+    )
+    .await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(body, "raw bytes!", "got: {}", response);
+}
+
+#[tokio::test]
+async fn test_raw_parser_skips_other_types() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::raw(express_rs::body::RawOptions::default()));
+        app.post("/echo", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(_) => {
+                    res.send("parsed");
+                }
+                None => {
+                    res.send("none");
+                }
+            }
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/echo",
+        &[("Content-Type", "text/plain")],
+        Some(b"just text"),
+    )
+    .await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(body, "none", "text/plain must not parse as raw, got: {}", response);
+}
+
+#[tokio::test]
+async fn test_raw_parser_enforces_limit() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::raw(express_rs::body::RawOptions {
+            limit: 8,
+            ..Default::default()
+        }));
+        app.post("/echo", |_req, mut res, _next, _params| async move {
+            res.send("ok");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "POST",
+        "/echo",
+        &[("Content-Type", "application/octet-stream")],
+        Some(b"0123456789ab"),
+    )
+    .await;
+    assert!(
+        response.contains("413"),
+        "Expected 413 over the limit, got: {}",
+        response
+    );
+}

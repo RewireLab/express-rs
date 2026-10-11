@@ -1,20 +1,22 @@
 //! Body parsing middleware.
 //!
 //! Mirrors the `body-parser` package Express 5 bundles as `express.json()`,
-//! `express.text()`, and `express.urlencoded()`: content-type gating,
-//! `Content-Encoding` decompression, charset checks, size limits, and
-//! typed errors. A parser that runs stores its result on the request;
-//! when the content type does not match, or the request carries no body,
-//! it calls `next()` and leaves the request untouched.
+//! `express.text()`, `express.urlencoded()`, and `express.raw()`:
+//! content-type gating, `Content-Encoding` decompression, charset
+//! checks, size limits, and typed errors. A parser that runs stores its
+//! result on the request; when the content type does not match, or the
+//! request carries no body, it calls `next()` and leaves the request
+//! untouched.
 //!
-//! Only JSON, text, and URL-encoded forms are supported. There is no raw
-//! parser yet, and no `zstd` support.
+//! `zstd` content encoding is not supported; Express gates it on the
+//! Node version.
 
 use std::future::Future;
 use std::io::Read;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use serde_json::Value;
 
 use crate::error::Error;
@@ -43,6 +45,8 @@ pub enum ParsedBody {
     Text(String),
     /// A URL-encoded form, as an object of strings and arrays.
     Form(Value),
+    /// The undecoded body bytes, as `express.raw()` stores them.
+    Raw(Bytes),
 }
 
 /// Boxed future returned by body-parser middleware.
@@ -139,6 +143,30 @@ impl Default for FormOptions {
             parameter_limit: DEFAULT_PARAMETER_LIMIT,
             depth: DEFAULT_DEPTH,
             default_charset: "utf-8".to_string(),
+            verify: None,
+        }
+    }
+}
+
+/// Options for the raw parser.
+#[derive(Clone)]
+pub struct RawOptions {
+    /// Maximum body size in bytes. Defaults to 100kb.
+    pub limit: usize,
+    /// Decompress `gzip`, `deflate`, and `br` bodies. Defaults to true.
+    pub inflate: bool,
+    /// Content types to parse. Defaults to `application/octet-stream`.
+    pub types: Vec<String>,
+    /// Optional verification callback.
+    pub verify: Option<VerifyFn>,
+}
+
+impl Default for RawOptions {
+    fn default() -> Self {
+        Self {
+            limit: DEFAULT_LIMIT,
+            inflate: true,
+            types: vec!["application/octet-stream".to_string()],
             verify: None,
         }
     }
@@ -251,6 +279,40 @@ pub fn urlencoded(
                 opts.depth,
             )?;
             req.set_parsed_body(ParsedBody::Form(value));
+            next(NextCall::Continue).await;
+            Ok(res)
+        })
+    }
+}
+
+/// Raw body-parsing middleware, as `express.raw()`.
+///
+/// Stores a [`ParsedBody::Raw`] value holding the undecoded bytes. The
+/// declared charset is accepted without validation, because nothing is
+/// decoded.
+pub fn raw(
+    options: RawOptions,
+) -> impl Fn(Arc<Request>, Response, Next, Params) -> BodyFuture + Send + Sync + 'static {
+    move |req, res, next, _params| {
+        let opts = options.clone();
+        Box::pin(async move {
+            let prepared = match prepare(
+                &req,
+                &opts.types,
+                opts.inflate,
+                opts.limit,
+                CharsetRule::Any,
+                "utf-8",
+                &opts.verify,
+            )? {
+                Some(p) => p,
+                None => {
+                    next(NextCall::Continue).await;
+                    return Ok(res);
+                }
+            };
+
+            req.set_parsed_body(ParsedBody::Raw(Bytes::from(prepared.bytes)));
             next(NextCall::Continue).await;
             Ok(res)
         })
