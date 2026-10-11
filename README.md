@@ -10,7 +10,7 @@ The point of express-rs is to *rewire* an existing idea and learn from the proce
 
 ## Status
 
-**Phase 10: File sending** — complete.
+**Phase 11: Content negotiation** — complete.
 
 The framework currently provides:
 
@@ -40,6 +40,7 @@ The framework currently provides:
 - **Static files:** `static_files::serve_static()` and `serve_static_at()` with content types, `ETag`/`Last-Modified` caching, conditional requests, single ranges, index files, and trailing-slash redirects
 - **Cookies:** `res.cookie()` and `res.clear_cookie()` with attribute options, and built-in `req.cookies()` parsing
 - **File sending:** `static_files::send_file()` and `download()` with root confinement, dotfile policy, conditional requests, and ranges
+- **Content negotiation:** `response::format()` picks a body by `Accept`, with extension keys, a default fallback, `Vary: Accept`, and 406 when nothing matches
 
 ## Quick Start
 
@@ -140,6 +141,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | **`send_file` errors are `Result`** | Express's `res.sendFile` without a callback forwards failures to `next(err)`; with a callback the handler inspects the error. `Result<Response, Error>` is both — return the `Err` to reach error middleware, or match on it. |
 | **Root confinement for `send_file`** | Express resolves through `path.resolve`, which lets an absolute `path` bypass the `root` option entirely. Here an absolute path with a root is refused, and the resolved file must stay under the root — the same stance the static middleware takes on symlinks. |
 | **Manual `Default` for option structs** | A derived `Default` zeroed every flag once already (`StaticOptions` in the static-files phase); `SendFileOptions` carries a hand-written impl so the send defaults — ETag, freshness, ranges, cache-control all on — survive. |
+| **`format()` is a free function** | It must read the request's `Accept` header, and a `Response` method cannot see the request — the same reason finalisation lives in the server. `response::format(&req, res, |f| ...)`. |
 
 ### Dependencies
 
@@ -206,7 +208,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `res.clearCookie()` | ✅ | `clear_cookie()`; forces epoch expiry |
 | Cookie parsing (`req.cookies`) | ✅ | built in; Express needs the `cookie-parser` middleware |
 | Signed cookies | ❌ | the `s:` HMAC prefix needs a per-app secret |
-| `res.format()` | ❌ | not implemented |
+| `res.format()` | ✅ | `response::format()`; handlers take the `Response` only |
 | `res.sendFile()` | ✅ | `static_files::send_file()`; errors surface as `Result` |
 | `res.download()` | ✅ | `static_files::download()`; `Content-Disposition` attachment |
 | Body parsing (JSON, text, form) | ✅ | `body::json()`, `body::text()`, `body::urlencoded()` |
@@ -277,6 +279,14 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 - `Content-Disposition` is a subset of the `content-disposition` package: names within ISO-8859-1 are quoted with `"` and `\` escaped; names outside it gain a percent-encoded `filename*` parameter with a `_`-substituted fallback.
 - `download()` sets the header before sending, so a send failure discards it, exactly as Express loses the header to `next(err)`.
 
+### Known differences in content negotiation
+
+- Handlers receive the `Response` only. Express passes `(req, res, next)`; here the request is in scope at the call site, and `next` has no equivalent — the handler returns the response or an `Err`.
+- The fallback is a `.default()` method rather than a `default` key in the object.
+- Keys go through `req.accepts()`, so extensions and full types both work and the chosen key is reported back as offered; the `Content-Type` is that key normalised to a bare MIME type.
+- The 406 travels as an `Err`, so the `Vary: Accept` header `format()` had already set is discarded on the way to the error handler. Express's `finalhandler` writes onto the original response, where the header survives.
+- The chosen handler's `send()`/`json()` applies the usual charset rules afterwards, so a text type gains `charset=utf-8` just as it would outside `format()`.
+
 ## Testing
 
 ```bash
@@ -285,8 +295,8 @@ cargo test
 
 Integration tests start a real server on a random port and make actual HTTP requests over TCP.
 
-- 112 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, cookies, and content disposition
-- 148 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing, static files, cookies, and file sending
+- 115 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, cookies, content disposition, and type normalisation
+- 154 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing, static files, cookies, file sending, and content negotiation
 
 ```bash
 cargo fmt --check   # formatting
