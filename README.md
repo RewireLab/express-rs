@@ -10,7 +10,7 @@ The point of express-rs is to *rewire* an existing idea and learn from the proce
 
 ## Status
 
-**Phase 15: Route-scoped error handlers** — complete.
+**Phase 16: Mounted routers** — complete.
 
 The framework currently provides:
 
@@ -44,6 +44,7 @@ The framework currently provides:
 - **Raw bodies:** `body::raw()` stores the undecoded bytes behind content-type gating, size limits, and inflation
 - **Parameter callbacks:** `app.param()` runs before any matched layer binding that name, at most once per request
 - **Route-scoped error handlers:** `app.get_with_error()` and friends pair a handler with its own error handler
+- **Mounted routers:** `app.mount("/api", sub_router)` with relative paths, fallthrough to the parent, `next('router')`, and parent error middleware catching sub-router errors
 
 ## Quick Start
 
@@ -146,6 +147,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | **Manual `Default` for option structs** | A derived `Default` zeroed every flag once already (`StaticOptions` in the static-files phase); `SendFileOptions` carries a hand-written impl so the send defaults — ETag, freshness, ranges, cache-control all on — survive. |
 | **`format()` is a free function** | It must read the request's `Accept` header, and a `Response` method cannot see the request — the same reason finalisation lives in the server. `response::format(&req, res, |f| ...)`. |
 | **Parameter callbacks dispatched, not layered** | `app.param()` callbacks are not stack layers; the router consults the registry when a layer's bound params name one, then runs the callback inline before that layer's handlers — which is how a callback registered after a route still applies, and how the once-per-request cache works. |
+| **Mounting strips the prefix for matching only** | Express rewrites `req.url` when a sub-app takes over, so `req.path()` inside it excludes the mount. The request here is behind an `Arc` and cannot be rewritten, so a mounted router matches against the stripped path while `req.path()` still shows the full one. |
 | **Route-scoped error handlers as paired arguments** | Express tells handlers and error handlers apart by arity inside one route's stack. Rust closures expose no arity, so the pairing is explicit: `get_with_error(path, handler, err_handler)` puts both on one layer, and the route's dispatch gives its own handler's failure to its error handler before any global one. |
 
 ### Dependencies
@@ -208,7 +210,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `req.xhr()` | ✅ | |
 | `req.fresh()` | ✅ | ETag branch; date comparison not implemented |
 | Strict routing | ⚠️ | flag accepted, not enforced |
-| `next('router')` | ❌ | not implemented |
+| `next('router')` | ✅ | exits a mounted router to its parent |
 | `app.param()` callbacks | ✅ | one name per call; the value arrives in `params` |
 | `res.cookie()` | ✅ | `CookieOptions` carries the attributes |
 | `res.clearCookie()` | ✅ | `clear_cookie()`; forces epoch expiry |
@@ -285,6 +287,13 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 - `Content-Disposition` is a subset of the `content-disposition` package: names within ISO-8859-1 are quoted with `"` and `\` escaped; names outside it gain a percent-encoded `filename*` parameter with a `_`-substituted fallback.
 - `download()` sets the header before sending, so a send failure discards it, exactly as Express loses the header to `next(err)`.
 
+### Known differences in mounted routers
+
+- `req.path()` inside a mounted router still shows the full path; only matching uses the stripped remainder, because the request is behind an `Arc` and cannot be rewritten the way Express rewrites `req.url`.
+- Middleware that relies on the request path — the static-file middleware, `req.route`-style introspection — sees the full path and needs the mount passed explicitly, as `serve_static_at` already does.
+- Mount parameters (`app.mount("/org/:org", sub)`) arrive in the sub-router's `params` alongside its own; the sub-router's `app.param()` callbacks fire for its own parameters, and the parent's fire for the mount's.
+- A sub-router error bubbles to the parent's error middleware; the sub-router is skipped entirely while that error is pending.
+
 ### Known differences in parameter callbacks
 
 - The bound value arrives in `params` rather than as dedicated `value`/`name` arguments, since the callback shape is the same as any middleware's.
@@ -309,7 +318,7 @@ cargo test
 Integration tests start a real server on a random port and make actual HTTP requests over TCP.
 
 - 117 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, cookies, content disposition, and type normalisation
-- 166 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing (including raw), static files, cookies, file sending, content negotiation, parameter callbacks, and route-scoped errors
+- 171 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing (including raw), static files, cookies, file sending, content negotiation, parameter callbacks, route-scoped errors, and mounted routers
 
 ```bash
 cargo fmt --check   # formatting
