@@ -10,7 +10,7 @@ The point of express-rs is to *rewire* an existing idea and learn from the proce
 
 ## Status
 
-**Phase 16: Mounted routers** — complete.
+**Phase 17: Polish** — complete.
 
 The framework currently provides:
 
@@ -45,6 +45,10 @@ The framework currently provides:
 - **Parameter callbacks:** `app.param()` runs before any matched layer binding that name, at most once per request
 - **Route-scoped error handlers:** `app.get_with_error()` and friends pair a handler with its own error handler
 - **Mounted routers:** `app.mount("/api", sub_router)` with relative paths, fallthrough to the parent, `next('router')`, and parent error middleware catching sub-router errors
+- **Signed cookies:** `cookie_signed()` emits `s:<value>.<hmac>`; `signed_cookies()` verifies against a secret
+- **Settings:** `app.disable("x-powered-by")` drops the `X-Powered-By` header Express sends by default
+- **Strict routing:** `app.strict()` makes a route's trailing slash significant
+- **`res.attachment()`** and **`req.fresh()` date comparison** complete the response and freshness APIs
 
 ## Quick Start
 
@@ -147,6 +151,8 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | **Manual `Default` for option structs** | A derived `Default` zeroed every flag once already (`StaticOptions` in the static-files phase); `SendFileOptions` carries a hand-written impl so the send defaults — ETag, freshness, ranges, cache-control all on — survive. |
 | **`format()` is a free function** | It must read the request's `Accept` header, and a `Response` method cannot see the request — the same reason finalisation lives in the server. `response::format(&req, res, |f| ...)`. |
 | **Parameter callbacks dispatched, not layered** | `app.param()` callbacks are not stack layers; the router consults the registry when a layer's bound params name one, then runs the callback inline before that layer's handlers — which is how a callback registered after a route still applies, and how the once-per-request cache works. |
+| **Signed cookies verify before decoding** | The HMAC covers the still-encoded value, so verification re-reads the raw `Cookie` header and only the verified result is percent-decoded. The secret rides in the call, because a `Response` cannot see the request the way Express's `res` reaches `req.secret`. |
+| **`X-Powered-By` applied after finalisation** | Express stamps the header at request start; doing it after the response finishes means error pages carry it too, and an absent-check keeps a handler's own value. |
 | **Mounting strips the prefix for matching only** | Express rewrites `req.url` when a sub-app takes over, so `req.path()` inside it excludes the mount. The request here is behind an `Arc` and cannot be rewritten, so a mounted router matches against the stripped path while `req.path()` still shows the full one. |
 | **Route-scoped error handlers as paired arguments** | Express tells handlers and error handlers apart by arity inside one route's stack. Rust closures expose no arity, so the pairing is explicit: `get_with_error(path, handler, err_handler)` puts both on one layer, and the route's dispatch gives its own handler's failure to its error handler before any global one. |
 
@@ -163,6 +169,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `bytes` | Efficient byte buffers |
 | `serde` / `serde_json` | JSON serialisation for `res.json()` |
 | `sha1` | ETag generation |
+| `sha2` + `hmac` | cookie signatures (HMAC-SHA256) |
 | `flate2` | `gzip` and `deflate` body decompression |
 | `zstd` | `zstd` body decompression |
 | `brotli` | `br` body decompression |
@@ -208,14 +215,14 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `req.is()` | ✅ | full type or extension |
 | `req.host()` / `hostname()` | ✅ | Express 5 keeps the port |
 | `req.xhr()` | ✅ | |
-| `req.fresh()` | ✅ | ETag branch; date comparison not implemented |
-| Strict routing | ⚠️ | flag accepted, not enforced |
+| `req.fresh()` | ✅ | ETag and `If-Modified-Since`, whole-second precision |
+| Strict routing | ✅ | enforced on routes; middleware prefixes stay lenient |
 | `next('router')` | ✅ | exits a mounted router to its parent |
 | `app.param()` callbacks | ✅ | one name per call; the value arrives in `params` |
 | `res.cookie()` | ✅ | `CookieOptions` carries the attributes |
 | `res.clearCookie()` | ✅ | `clear_cookie()`; forces epoch expiry |
 | Cookie parsing (`req.cookies`) | ✅ | built in; Express needs the `cookie-parser` middleware |
-| Signed cookies | ❌ | the `s:` HMAC prefix needs a per-app secret |
+| Signed cookies | ✅ | `cookie_signed()` / `signed_cookies()`; the secret rides in the call |
 | `res.format()` | ✅ | `response::format()`; handlers take the `Response` only |
 | `res.sendFile()` | ✅ | `static_files::send_file()`; errors surface as `Result` |
 | `res.download()` | ✅ | `static_files::download()`; `Content-Disposition` attachment |
@@ -223,6 +230,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | Extended form nesting | ⚠️ | `a[b]` subset, not full `qs` |
 | Raw bodies | ✅ | `body::raw()` |
 | `zstd` content encoding | ✅ | Express gates it on the Node version; always on here |
+| `X-Powered-By: Express` | ✅ | sent by default; `app.disable("x-powered-by")` removes it |
 | Static files | ✅ | `static_files::serve_static()` / `serve_static_at()` |
 | Dotfile policy | ✅ | ignore (default), allow, deny |
 | Directory index + redirect | ✅ | `index.html` default, 301 to trailing slash |
@@ -269,7 +277,8 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 
 ### Known differences in cookies
 
-- Signed cookies (`s:`-prefixed HMAC values via cookie-parser) are not implemented; there is no per-app secret to sign with.
+- Signed cookies take the secret per call (`cookie_signed(name, value, secret, options)`, `signed_cookies(secret)`) rather than from an app-wide `secret` setting.
+- Signature verification re-parses the raw `Cookie` header undecoded; `req.cookies()` keeps signed entries where cookie-parser removes them, so a signed cookie appears in both unless the call site filters.
 - The `encode`/`decode` options do not exist. Values always go out `encodeURIComponent`-encoded and come in percent-decoded; an escape that does not decode is kept raw rather than failing the request the way `cookie-parser` surfaces a 500.
 - `max_age_secs` takes seconds and also derives `Expires` from the current time, matching what Express does with `maxAge`.
 - `partitioned` without `secure` is dropped silently; Express throws `TypeError`.
@@ -317,8 +326,8 @@ cargo test
 
 Integration tests start a real server on a random port and make actual HTTP requests over TCP.
 
-- 117 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, cookies, content disposition, and type normalisation
-- 171 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing (including raw), static files, cookies, file sending, content negotiation, parameter callbacks, route-scoped errors, and mounted routers
+- 123 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, cookies (including signatures), content disposition, and type normalisation
+- 177 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing (including raw), static files, cookies (including signed), file sending, content negotiation, parameter callbacks, route-scoped errors, mounted routers, and the polish settings
 
 ```bash
 cargo fmt --check   # formatting
