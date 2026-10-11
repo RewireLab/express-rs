@@ -4036,3 +4036,513 @@ async fn test_cookie_round_trip_through_the_client() {
     let body = response.split("\r\n\r\n").nth(1).unwrap_or("");
     assert_eq!(body, "héllo wörld & =");
 }
+
+// ============================================================
+// Phase 10: File Sending Tests
+// ============================================================
+
+/// Create a fixture tree for send_file tests.
+///
+/// `base/root/` holds the files to serve; `base/outside.txt` sits
+/// outside the root for traversal tests.
+fn send_file_fixture(tag: &str) -> std::path::PathBuf {
+    let base = std::env::temp_dir().join(format!("express-rs-send-{}-{}", tag, std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("root")).unwrap();
+    std::fs::write(base.join("root").join("report.txt"), "hello send").unwrap();
+    std::fs::write(base.join("root").join(".secret"), "hidden").unwrap();
+    std::fs::write(base.join("outside.txt"), "outside").unwrap();
+    base
+}
+
+#[tokio::test]
+async fn test_send_file_serves_default_headers() {
+    let base = send_file_fixture("headers");
+    let port = start_server(move |app| {
+        let root = base.join("root");
+        app.get("/file", move |req, res, _next, _params| {
+            let root = root.clone();
+            async move {
+                let res = express_rs::static_files::send_file(
+                    &req,
+                    res,
+                    root.join("report.txt"),
+                    &express_rs::static_files::SendFileOptions::default(),
+                )
+                .await?;
+                Ok(res)
+            }
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/file", None).await;
+    assert!(response.contains("200 OK"), "got: {}", response);
+    assert!(response.contains("text/plain"), "got: {}", response);
+    assert!(
+        response.contains("cache-control: public, max-age=0"),
+        "got: {}",
+        response
+    );
+    assert!(
+        response.contains("accept-ranges: bytes"),
+        "got: {}",
+        response
+    );
+    assert!(response.contains("etag: W/"), "got: {}", response);
+    assert!(response.contains("last-modified:"), "got: {}", response);
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(
+        body, "hello send",
+        "Expected file contents, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_send_file_errors_reach_the_error_middleware() {
+    let base = send_file_fixture("errors");
+    let port = start_server(move |app| {
+        let root = base.join("root");
+        let missing = root.clone();
+        app.get("/missing", move |req, res, _next, _params| {
+            let root = missing.clone();
+            async move {
+                let res = express_rs::static_files::send_file(
+                    &req,
+                    res,
+                    root.join("nope.txt"),
+                    &express_rs::static_files::SendFileOptions::default(),
+                )
+                .await?;
+                Ok(res)
+            }
+        });
+        let dir = root.clone();
+        app.get("/dir", move |req, res, _next, _params| {
+            let root = dir.clone();
+            async move {
+                let res = express_rs::static_files::send_file(
+                    &req,
+                    res,
+                    root.clone(),
+                    &express_rs::static_files::SendFileOptions::default(),
+                )
+                .await?;
+                Ok(res)
+            }
+        });
+        app.get("/relative", move |req, res, _next, _params| async move {
+            let res = express_rs::static_files::send_file(
+                &req,
+                res,
+                "report.txt",
+                &express_rs::static_files::SendFileOptions::default(),
+            )
+            .await?;
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/missing", None).await;
+    assert!(
+        response.contains("404 Not Found"),
+        "Expected 404, got: {}",
+        response
+    );
+
+    let response = request(port, "GET", "/dir", None).await;
+    assert!(
+        response.contains("404 Not Found"),
+        "A directory is a 404, got: {}",
+        response
+    );
+
+    let response = request(port, "GET", "/relative", None).await;
+    assert!(
+        response.contains("500 Internal Server Error"),
+        "Expected 500 for a relative path, got: {}",
+        response
+    );
+    assert!(
+        response.contains("path must be absolute"),
+        "Expected the TypeError message, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_send_file_with_root_confines_the_path() {
+    let base = send_file_fixture("root");
+    let port = start_server(move |app| {
+        let root = base.join("root");
+        let ok = root.clone();
+        app.get("/ok", move |req, res, _next, _params| {
+            let root = ok.clone();
+            async move {
+                let res = express_rs::static_files::send_file(
+                    &req,
+                    res,
+                    "report.txt",
+                    &express_rs::static_files::SendFileOptions::with_root(root),
+                )
+                .await?;
+                Ok(res)
+            }
+        });
+        let traverse = root.clone();
+        app.get("/traverse", move |req, res, _next, _params| {
+            let root = traverse.clone();
+            async move {
+                let res = express_rs::static_files::send_file(
+                    &req,
+                    res,
+                    "../outside.txt",
+                    &express_rs::static_files::SendFileOptions::with_root(root),
+                )
+                .await?;
+                Ok(res)
+            }
+        });
+        let absolute = root.clone();
+        app.get("/absolute", move |req, res, _next, _params| {
+            let root = absolute.clone();
+            async move {
+                let res = express_rs::static_files::send_file(
+                    &req,
+                    res,
+                    root.join("report.txt"),
+                    &express_rs::static_files::SendFileOptions::with_root(&root),
+                )
+                .await?;
+                Ok(res)
+            }
+        });
+        let missing = root.clone();
+        app.get("/missing", move |req, res, _next, _params| {
+            let root = missing.clone();
+            async move {
+                let res = express_rs::static_files::send_file(
+                    &req,
+                    res,
+                    "nope.txt",
+                    &express_rs::static_files::SendFileOptions::with_root(root),
+                )
+                .await?;
+                Ok(res)
+            }
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/ok", None).await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(
+        body, "hello send",
+        "Expected the rooted file, got: {}",
+        response
+    );
+
+    let response = request(port, "GET", "/traverse", None).await;
+    assert!(
+        response.contains("403 Forbidden"),
+        "Expected traversal refused, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("outside"),
+        "Must not serve outside root, got: {}",
+        response
+    );
+
+    let response = request(port, "GET", "/absolute", None).await;
+    assert!(
+        response.contains("500 Internal Server Error"),
+        "Absolute path with root must be refused, got: {}",
+        response
+    );
+
+    let response = request(port, "GET", "/missing", None).await;
+    assert!(
+        response.contains("404 Not Found"),
+        "Expected 404, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_send_file_dotfile_policy() {
+    let base = send_file_fixture("dotfiles");
+    let port = start_server(move |app| {
+        let root = base.join("root");
+        let make_options = |dotfiles| express_rs::static_files::SendFileOptions {
+            dotfiles,
+            ..Default::default()
+        };
+        let ignored = make_options(express_rs::static_files::Dotfiles::Ignore);
+        let denied = make_options(express_rs::static_files::Dotfiles::Deny);
+        let allowed = make_options(express_rs::static_files::Dotfiles::Allow);
+        let ignored_root = root.clone();
+        let denied_root = root.clone();
+        let allowed_root = root.clone();
+
+        app.get("/ignore", move |req, res, _next, _params| {
+            let root = ignored_root.clone();
+            let options = ignored.clone();
+            async move {
+                let res =
+                    express_rs::static_files::send_file(&req, res, root.join(".secret"), &options)
+                        .await?;
+                Ok(res)
+            }
+        });
+        app.get("/deny", move |req, res, _next, _params| {
+            let root = denied_root.clone();
+            let options = denied.clone();
+            async move {
+                let res =
+                    express_rs::static_files::send_file(&req, res, root.join(".secret"), &options)
+                        .await?;
+                Ok(res)
+            }
+        });
+        app.get("/allow", move |req, res, _next, _params| {
+            let root = allowed_root.clone();
+            let options = allowed.clone();
+            async move {
+                let res =
+                    express_rs::static_files::send_file(&req, res, root.join(".secret"), &options)
+                        .await?;
+                Ok(res)
+            }
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/ignore", None).await;
+    assert!(
+        response.contains("404 Not Found"),
+        "Ignore must hide dotfiles, got: {}",
+        response
+    );
+
+    let response = request(port, "GET", "/deny", None).await;
+    assert!(
+        response.contains("403 Forbidden"),
+        "Deny must answer 403, got: {}",
+        response
+    );
+
+    let response = request(port, "GET", "/allow", None).await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(
+        body, "hidden",
+        "Allow must serve dotfiles, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_send_file_conditional_request_is_304() {
+    let base = send_file_fixture("conditional");
+    let port = start_server(move |app| {
+        let root = base.join("root");
+        app.get("/file", move |req, res, _next, _params| {
+            let root = root.clone();
+            async move {
+                let res = express_rs::static_files::send_file(
+                    &req,
+                    res,
+                    root.join("report.txt"),
+                    &express_rs::static_files::SendFileOptions::default(),
+                )
+                .await?;
+                Ok(res)
+            }
+        });
+    })
+    .await;
+
+    let first = request(port, "GET", "/file", None).await;
+    let etag = first
+        .split("\r\n")
+        .find(|l| l.to_lowercase().starts_with("etag:"))
+        .and_then(|l| l.split_once(':'))
+        .map(|(_, v)| v.trim().to_string())
+        .expect("ETag on first response");
+
+    let second = request_raw(port, "GET", "/file", &[("If-None-Match", &etag)], None).await;
+    assert!(
+        second.contains("304 Not Modified"),
+        "Expected 304, got: {}",
+        second
+    );
+}
+
+#[tokio::test]
+async fn test_send_file_range_request_is_206() {
+    let base = send_file_fixture("range");
+    let port = start_server(move |app| {
+        let root = base.join("root");
+        app.get("/file", move |req, res, _next, _params| {
+            let root = root.clone();
+            async move {
+                let res = express_rs::static_files::send_file(
+                    &req,
+                    res,
+                    root.join("report.txt"),
+                    &express_rs::static_files::SendFileOptions::default(),
+                )
+                .await?;
+                Ok(res)
+            }
+        });
+    })
+    .await;
+
+    let response = request_raw(port, "GET", "/file", &[("Range", "bytes=0-4")], None).await;
+    assert!(
+        response.contains("206 Partial Content"),
+        "got: {}",
+        response
+    );
+    assert!(
+        response.contains("content-range: bytes 0-4/10"),
+        "got: {}",
+        response
+    );
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(
+        body, "hello",
+        "Expected the first five bytes, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("hello send"),
+        "Full body must not appear for a range, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_send_file_cache_options_and_header_hook() {
+    let base = send_file_fixture("cache");
+    let port = start_server(move |app| {
+        let root = base.join("root");
+        app.get("/file", move |req, res, _next, _params| {
+            let root = root.clone();
+            let options = express_rs::static_files::SendFileOptions {
+                max_age_secs: 3600,
+                immutable: true,
+                on_headers: Some(std::sync::Arc::new(|res, _info| {
+                    res.set("x-custom", "hook");
+                })),
+                ..Default::default()
+            };
+            async move {
+                let res = express_rs::static_files::send_file(
+                    &req,
+                    res,
+                    root.join("report.txt"),
+                    &options,
+                )
+                .await?;
+                Ok(res)
+            }
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/file", None).await;
+    assert!(
+        response.contains("cache-control: public, max-age=3600, immutable"),
+        "got: {}",
+        response
+    );
+    assert!(response.contains("x-custom: hook"), "got: {}", response);
+}
+
+#[tokio::test]
+async fn test_download_sets_content_disposition() {
+    let base = send_file_fixture("download");
+    let port = start_server(move |app| {
+        let root = base.join("root");
+        let explicit = root.clone();
+        app.get("/named", move |req, res, _next, _params| {
+            let root = explicit.clone();
+            async move {
+                let res = express_rs::static_files::download(
+                    &req,
+                    res,
+                    root.join("report.txt"),
+                    Some("report.txt"),
+                    &express_rs::static_files::SendFileOptions::default(),
+                )
+                .await?;
+                Ok(res)
+            }
+        });
+        let default_root = root.clone();
+        app.get("/default", move |req, res, _next, _params| {
+            let root = default_root.clone();
+            async move {
+                let res = express_rs::static_files::download(
+                    &req,
+                    res,
+                    root.join("report.txt"),
+                    None,
+                    &express_rs::static_files::SendFileOptions::default(),
+                )
+                .await?;
+                Ok(res)
+            }
+        });
+        let unicode_root = root.clone();
+        app.get("/unicode", move |req, res, _next, _params| {
+            let root = unicode_root.clone();
+            async move {
+                let res = express_rs::static_files::download(
+                    &req,
+                    res,
+                    root.join("report.txt"),
+                    Some("ファイル.txt"),
+                    &express_rs::static_files::SendFileOptions::default(),
+                )
+                .await?;
+                Ok(res)
+            }
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/named", None).await;
+    assert!(
+        response.contains("content-disposition: attachment; filename=\"report.txt\""),
+        "got: {}",
+        response
+    );
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(
+        body, "hello send",
+        "Expected the file body, got: {}",
+        response
+    );
+
+    let response = request(port, "GET", "/default", None).await;
+    assert!(
+        response.contains("content-disposition: attachment; filename=\"report.txt\""),
+        "Expected basename default, got: {}",
+        response
+    );
+
+    let response = request(port, "GET", "/unicode", None).await;
+    assert!(
+        response.contains(
+            "content-disposition: attachment; filename=\"____.txt\"; \
+             filename*=UTF-8''%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB.txt"
+        ),
+        "Expected RFC 5987 encoding, got: {}",
+        response
+    );
+}

@@ -10,7 +10,7 @@ The point of express-rs is to *rewire* an existing idea and learn from the proce
 
 ## Status
 
-**Phase 9: Cookies** — complete.
+**Phase 10: File sending** — complete.
 
 The framework currently provides:
 
@@ -39,6 +39,7 @@ The framework currently provides:
 - **Body parsing:** `body::json()`, `body::text()`, `body::urlencoded()` with content-type gating, `gzip`/`deflate`/`br` decompression, charset checks, size limits, and typed errors
 - **Static files:** `static_files::serve_static()` and `serve_static_at()` with content types, `ETag`/`Last-Modified` caching, conditional requests, single ranges, index files, and trailing-slash redirects
 - **Cookies:** `res.cookie()` and `res.clear_cookie()` with attribute options, and built-in `req.cookies()` parsing
+- **File sending:** `static_files::send_file()` and `download()` with root confinement, dotfile policy, conditional requests, and ranges
 
 ## Quick Start
 
@@ -84,7 +85,7 @@ src/
   response.rs  — Response wrapper (status, headers, body)
   body.rs      — Body parsing middleware (JSON, text, forms)
   cookies.rs   — Cookie parsing and `Set-Cookie` serialisation
-  static_files.rs — Static file middleware (serve-static equivalent)
+  static_files.rs — Static file middleware (serve-static equivalent) plus `send_file()`/`download()` (send equivalent)
   mime.rs      — Content type resolution and charset handling
   etag.rs      — Entity tag generation and comparison
   error.rs     — Error types
@@ -136,6 +137,9 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | **Cookies parsed eagerly on the request** | Express fills `req.cookies` through the `cookie-parser` middleware. The parse is cheap, so it happens in `Request::new` beside the query string and is always available. |
 | **`Set-Cookie` bypasses `append()`** | `res.append()` comma-joins values, which would merge distinct cookies into one broken header. `res.cookie()` appends real header instances instead. |
 | **No throw for invalid cookie options** | Express throws `TypeError` for a control-character name or `partitioned` without `secure`. A handler here has no error channel, so both cases are dropped silently. |
+| **`send_file` errors are `Result`** | Express's `res.sendFile` without a callback forwards failures to `next(err)`; with a callback the handler inspects the error. `Result<Response, Error>` is both — return the `Err` to reach error middleware, or match on it. |
+| **Root confinement for `send_file`** | Express resolves through `path.resolve`, which lets an absolute `path` bypass the `root` option entirely. Here an absolute path with a root is refused, and the resolved file must stay under the root — the same stance the static middleware takes on symlinks. |
+| **Manual `Default` for option structs** | A derived `Default` zeroed every flag once already (`StaticOptions` in the static-files phase); `SendFileOptions` carries a hand-written impl so the send defaults — ETag, freshness, ranges, cache-control all on — survive. |
 
 ### Dependencies
 
@@ -203,7 +207,8 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | Cookie parsing (`req.cookies`) | ✅ | built in; Express needs the `cookie-parser` middleware |
 | Signed cookies | ❌ | the `s:` HMAC prefix needs a per-app secret |
 | `res.format()` | ❌ | not implemented |
-| `res.sendFile()` | ❌ | not implemented |
+| `res.sendFile()` | ✅ | `static_files::send_file()`; errors surface as `Result` |
+| `res.download()` | ✅ | `static_files::download()`; `Content-Disposition` attachment |
 | Body parsing (JSON, text, form) | ✅ | `body::json()`, `body::text()`, `body::urlencoded()` |
 | Extended form nesting | ⚠️ | `a[b]` subset, not full `qs` |
 | Raw bodies | ❌ | no raw parser yet |
@@ -263,6 +268,15 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 - `clear_cookie` drops a caller-supplied `max_age`. Express's `clearCookie` would let it overwrite the epoch expiry and keep the cookie alive.
 - When a request carries the same cookie name twice, the first occurrence wins.
 
+### Known differences in file sending
+
+- Without `root`, `path` must be absolute; a relative path is a 500 carrying Express's "path must be absolute or specify root" message. Express throws the equivalent `TypeError` synchronously.
+- With `root`, an absolute `path` is refused. Express's `path.resolve(root, path)` would let it escape the root outright; confinement here forbids it.
+- The `dotfiles` policy applies to every component of the supplied path, so a dotfile deep inside an absolute path is hidden or refused the same way one under `root` is.
+- `extensions`, `start`, and `end` from the `send` options are not supported.
+- `Content-Disposition` is a subset of the `content-disposition` package: names within ISO-8859-1 are quoted with `"` and `\` escaped; names outside it gain a percent-encoded `filename*` parameter with a `_`-substituted fallback.
+- `download()` sets the header before sending, so a send failure discards it, exactly as Express loses the header to `next(err)`.
+
 ## Testing
 
 ```bash
@@ -271,8 +285,8 @@ cargo test
 
 Integration tests start a real server on a random port and make actual HTTP requests over TCP.
 
-- 108 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, and cookies
-- 140 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing, static files, and cookies
+- 112 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, cookies, and content disposition
+- 148 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing, static files, cookies, and file sending
 
 ```bash
 cargo fmt --check   # formatting

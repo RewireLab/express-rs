@@ -1,12 +1,20 @@
-//! Static file middleware, as `express.static()`.
+//! Static file middleware and file sending.
 //!
-//! Serves files from a root directory with `Content-Type` lookup,
+//! `serve_static()` mirrors `express.static()` — the `serve-static`
+//! package — serving a root directory with `Content-Type` lookup,
 //! `ETag` and `Last-Modified` caching, conditional requests, single
 //! range requests, index files, and trailing-slash redirects. Path
 //! traversal is blocked, including through symlinks.
 //!
-//! Register it with `app.use`, giving the mount point to the factory so
-//! it can strip its own prefix:
+//! `send_file()` and `download()` mirror `res.sendFile()` and
+//! `res.download()`, built on the same machinery:
+//!
+//! ```ignore
+//! static_files::send_file(&req, res, "/srv/app/report.pdf", &SendFileOptions::default()).await?;
+//! ```
+//!
+//! Register the middleware with `app.use`, giving the mount point to
+//! the factory so it can strip its own prefix:
 //!
 //! ```ignore
 //! app.use(static_files::serve_static_at(
@@ -121,6 +129,60 @@ impl StaticOptions {
     }
 }
 
+/// Options for [`send_file`], mirroring the `send` module's options.
+#[derive(Clone)]
+pub struct SendFileOptions {
+    /// Resolve `path` relative to this root and confine it there.
+    ///
+    /// Express resolves through `path.resolve`, which lets an absolute
+    /// `path` escape the root entirely; here an absolute path with a
+    /// root is refused, and the resolved file must stay under the root.
+    pub root: Option<PathBuf>,
+    /// Hidden file policy. Defaults to ignoring them, which answers
+    /// 404 for any path component starting with a dot.
+    pub dotfiles: Dotfiles,
+    /// `Cache-Control` lifetime in seconds. Defaults to 0.
+    pub max_age_secs: u64,
+    /// Append `immutable` to `Cache-Control`. Defaults to false.
+    pub immutable: bool,
+    /// Send `ETag`. Defaults to true.
+    pub etag: bool,
+    /// Send `Last-Modified`. Defaults to true.
+    pub last_modified: bool,
+    /// Send `Accept-Ranges`. Defaults to true.
+    pub accept_ranges: bool,
+    /// Send `Cache-Control`. Defaults to true.
+    pub cache_control: bool,
+    /// Hook run after the default headers are set, as `setHeaders`.
+    pub on_headers: Option<HeaderHook>,
+}
+
+impl Default for SendFileOptions {
+    fn default() -> Self {
+        Self {
+            root: None,
+            dotfiles: Dotfiles::Ignore,
+            max_age_secs: 0,
+            immutable: false,
+            etag: true,
+            last_modified: true,
+            accept_ranges: true,
+            cache_control: true,
+            on_headers: None,
+        }
+    }
+}
+
+impl SendFileOptions {
+    /// Options resolving paths against `root`.
+    pub fn with_root(root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: Some(root.into()),
+            ..Self::default()
+        }
+    }
+}
+
 /// Serve files from `root` at the `/` mount point.
 pub fn serve_static(
     root: impl Into<PathBuf>,
@@ -146,6 +208,159 @@ pub fn serve_static_at(
         let root = root.clone();
         let options = options.clone();
         Box::pin(async move { serve(&req, res, &next, &mount, &root, &options).await })
+    }
+}
+
+/// Send one file, as `res.sendFile()`.
+///
+/// Without `root`, `path` must be absolute; a relative path is the
+/// 500 that Express's `TypeError` becomes here. With `root`, `path` is
+/// relative to it and confined under it. A missing file or a directory
+/// answers `Err(404)`, matching `next(err)` in Express; the handler can
+/// return that `Err` to reach the error middleware, or match on it.
+pub async fn send_file(
+    req: &Request,
+    res: Response,
+    path: impl AsRef<Path>,
+    options: &SendFileOptions,
+) -> Result<Response, Error> {
+    let path = path.as_ref();
+    let path_str = path.to_string_lossy();
+
+    let resolved = match &options.root {
+        Some(root) => {
+            if path.is_absolute() {
+                // `path.resolve` would hand an absolute path straight
+                // through, escaping the root; confinement refuses it.
+                return Err(Error::with_status(
+                    500,
+                    "path must be relative when root is set to send_file",
+                ));
+            }
+            let canonical_root = tokio::fs::canonicalize(root)
+                .await
+                .map_err(|_| Error::with_status(404, "not found"))?;
+            check_segments(&path_str, &options.dotfiles)?;
+            let resolved = tokio::fs::canonicalize(canonical_root.join(path))
+                .await
+                .map_err(|_| Error::with_status(404, "not found"))?;
+            if !resolved.starts_with(&canonical_root) {
+                return Err(Error::with_status(404, "not found"));
+            }
+            resolved
+        }
+        None => {
+            if !path.is_absolute() {
+                return Err(Error::with_status(
+                    500,
+                    "path must be absolute or specify root to send_file",
+                ));
+            }
+            check_segments(&path_str, &options.dotfiles)?;
+            tokio::fs::canonicalize(path)
+                .await
+                .map_err(|_| Error::with_status(404, "not found"))?
+        }
+    };
+
+    let meta = tokio::fs::metadata(&resolved)
+        .await
+        .map_err(|_| Error::with_status(404, "not found"))?;
+    if meta.is_dir() || !meta.is_file() {
+        return Err(Error::with_status(404, "not found"));
+    }
+
+    // A file addressed with a trailing slash is a 404, as in send.
+    if path_str.ends_with('/') {
+        return Err(Error::with_status(404, "not found"));
+    }
+
+    serve_file(
+        req,
+        res,
+        &resolved,
+        &meta,
+        &StaticOptions {
+            dotfiles: options.dotfiles,
+            max_age_secs: options.max_age_secs,
+            immutable: options.immutable,
+            etag: options.etag,
+            last_modified: options.last_modified,
+            accept_ranges: options.accept_ranges,
+            cache_control: options.cache_control,
+            on_headers: options.on_headers.clone(),
+            ..StaticOptions::default()
+        },
+    )
+    .await
+}
+
+/// Send one file as an attachment, as `res.download()`.
+///
+/// Sets `Content-Disposition: attachment` before sending. The name
+/// defaults to the file's basename; a name outside ISO-8859-1 also
+/// carries a percent-encoded `filename*` parameter.
+pub async fn download(
+    req: &Request,
+    mut res: Response,
+    path: impl AsRef<Path>,
+    filename: Option<&str>,
+    options: &SendFileOptions,
+) -> Result<Response, Error> {
+    let path = path.as_ref();
+    let name = match filename {
+        Some(f) => f.to_string(),
+        None => path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "download".to_string()),
+    };
+
+    res.set("content-disposition", &content_disposition(&name));
+    send_file(req, res, path, options).await
+}
+
+/// Enforce the lexical path rules `send` applies before any I/O:
+/// `..` is a 403, and dotfile components follow the policy.
+fn check_segments(path: &str, dotfiles: &Dotfiles) -> Result<(), Error> {
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    if segments.contains(&"..") {
+        return Err(Error::with_status(403, "forbidden"));
+    }
+
+    if segments.iter().any(|s| s.len() > 1 && s.starts_with('.')) {
+        return match dotfiles {
+            Dotfiles::Allow => Ok(()),
+            Dotfiles::Deny => Err(Error::with_status(403, "forbidden")),
+            Dotfiles::Ignore => Err(Error::with_status(404, "not found")),
+        };
+    }
+
+    Ok(())
+}
+
+/// Build an `attachment` `Content-Disposition` value.
+///
+/// A subset of the `content-disposition` package: the name is quoted
+/// with `"` and `\` escaped, and a name carrying characters outside
+/// ISO-8859-1 gains a `filename*` parameter percent-encoded the way
+/// `encodeURIComponent` does, with a `_`-substituted fallback.
+fn content_disposition(filename: &str) -> String {
+    let latin1: String = filename
+        .chars()
+        .map(|c| if (c as u32) <= 0xFF { c } else { '_' })
+        .collect();
+    let quoted = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
+
+    if latin1 == filename {
+        format!("attachment; filename={}", quoted(filename))
+    } else {
+        format!(
+            "attachment; filename={}; filename*=UTF-8''{}",
+            quoted(&latin1),
+            crate::cookies::encode_component(filename)
+        )
     }
 }
 
@@ -253,7 +468,7 @@ async fn serve(
         return miss(req, res, next, options).await;
     }
 
-    send_file(req, res, &resolved, &meta, options).await
+    serve_file(req, res, &resolved, &meta, options).await
 }
 
 /// Try `path + '.' + ext` fallbacks, then treat the miss normally.
@@ -291,7 +506,7 @@ async fn miss_with_extensions(
                 }
                 if let Ok(meta) = tokio::fs::metadata(&resolved).await {
                     if meta.is_file() {
-                        return send_file(req, res, &resolved, &meta, options).await;
+                        return serve_file(req, res, &resolved, &meta, options).await;
                     }
                 }
             }
@@ -336,7 +551,7 @@ async fn serve_directory(
         let candidate = dir.join(index);
         if let Ok(meta) = tokio::fs::metadata(&candidate).await {
             if meta.is_file() {
-                return send_file(req, res, &candidate, &meta, options).await;
+                return serve_file(req, res, &candidate, &meta, options).await;
             }
         }
     }
@@ -375,7 +590,7 @@ fn escape_html(s: &str) -> String {
 }
 
 /// Send one file with caching headers, freshness, and range support.
-async fn send_file(
+async fn serve_file(
     req: &Request,
     mut res: Response,
     path: &Path,
@@ -783,5 +998,37 @@ mod tests {
         assert_eq!(parse_range("bytes=abc", 1000), RangeOutcome::Full);
         assert_eq!(parse_range("bytes=0-1,3-4", 1000), RangeOutcome::Full);
         assert_eq!(parse_range("items=0-1", 1000), RangeOutcome::Full);
+    }
+
+    #[test]
+    fn content_disposition_quotes_ascii_names() {
+        assert_eq!(
+            content_disposition("report.txt"),
+            "attachment; filename=\"report.txt\""
+        );
+    }
+
+    #[test]
+    fn content_disposition_escapes_quotes_and_backslashes() {
+        assert_eq!(
+            content_disposition("a\"b\\c.txt"),
+            "attachment; filename=\"a\\\"b\\\\c.txt\""
+        );
+    }
+
+    #[test]
+    fn content_disposition_falls_back_for_non_latin1() {
+        assert_eq!(
+            content_disposition("\u{30d5}\u{30a1}\u{30a4}\u{30eb}.txt"),
+            "attachment; filename=\"____.txt\"; filename*=UTF-8''%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB.txt"
+        );
+    }
+
+    #[test]
+    fn content_disposition_keeps_latin1_in_the_quoted_name() {
+        assert_eq!(
+            content_disposition("caf\u{e9}.txt"),
+            "attachment; filename=\"caf\u{e9}.txt\""
+        );
     }
 }
