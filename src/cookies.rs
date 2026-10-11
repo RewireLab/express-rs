@@ -80,6 +80,18 @@ pub struct CookieOptions {
 /// are percent-decoded; surrounding quotes are stripped first. Pairs
 /// without an `=` or with an empty name are skipped.
 pub fn parse(header: &str) -> HashMap<String, String> {
+    parse_with(header, true)
+}
+
+/// Parse a `Cookie` header without percent-decoding values.
+///
+/// Signature verification needs the raw bytes: the HMAC covers the
+/// still-encoded value, so decoding must happen after it checks out.
+pub fn parse_undecoded(header: &str) -> HashMap<String, String> {
+    parse_with(header, false)
+}
+
+fn parse_with(header: &str, decode: bool) -> HashMap<String, String> {
     let mut map = HashMap::new();
 
     for pair in header.split(';') {
@@ -98,12 +110,86 @@ pub fn parse(header: &str) -> HashMap<String, String> {
             .strip_prefix('"')
             .map(|s| s.strip_suffix('"').unwrap_or(s))
             .unwrap_or(value);
-        let decoded = decode_component(value);
+        let value = if decode {
+            decode_component(value)
+        } else {
+            value.to_string()
+        };
 
-        map.entry(name.to_string()).or_insert(decoded);
+        map.entry(name.to_string()).or_insert(value);
     }
 
     map
+}
+
+/// Sign a value the way the `cookie-signature` package does:
+/// `base64(HMAC-SHA256(secret, value))` with padding stripped.
+pub fn sign(value: &str, secret: &str) -> String {
+    use hmac::Mac;
+
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes())
+        .expect("HMAC accepts any key length");
+    mac.update(value.as_bytes());
+    base64_nopad(&mac.finalize().into_bytes())
+}
+
+/// Verify a signed value, returning the unsigned part when the
+/// signature checks out.
+///
+/// The split happens at the **last** dot, so values containing dots
+/// survive. The comparison runs in constant time.
+pub fn unsign(signed: &str, secret: &str) -> Option<String> {
+    let dot = signed.rfind('.')?;
+    let (value, signature) = (&signed[..dot], &signed[dot + 1..]);
+    if constant_time_eq(&sign(value, secret), signature) {
+        Some(value.to_string())
+    } else {
+        None
+    }
+}
+
+/// Compare two strings without short-circuiting on the first
+/// difference, as `timingSafeEqual` does.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Standard base64 with the `=` padding removed, as cookie-signature
+/// emits.
+fn base64_nopad(data: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+
+    for chunk in data.chunks(3) {
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+
+    out.trim_end_matches('=').to_string()
 }
 
 /// Percent-encode a value the way `encodeURIComponent` does.
@@ -411,6 +497,46 @@ mod tests {
     fn serialize_handles_empty_value() {
         let field = serialize("sid", "", &CookieOptions::default()).unwrap();
         assert_eq!(field, "sid=; Path=/");
+    }
+
+    #[test]
+    fn sign_matches_the_cookie_signature_format() {
+        // Pinned against Node's crypto:
+        //   base64(HMAC-SHA256('secret', 'value')) with padding stripped.
+        assert_eq!(
+            sign("value", "secret"),
+            "UOA+vmW+mLuL8RuiyJLVTAeayisNOwFidpxtdXolQ08"
+        );
+    }
+
+    #[test]
+    fn unsign_round_trips_and_rejects_tampering() {
+        let signed = format!("{}.{}", "a%20b", sign("a%20b", "topsecret"));
+        assert_eq!(unsign(&signed, "topsecret").as_deref(), Some("a%20b"));
+
+        let tampered = signed.replace("a%20b", "a%20c");
+        assert_eq!(unsign(&tampered, "topsecret"), None);
+        assert_eq!(unsign(&signed, "wrong"), None);
+        assert_eq!(unsign("no-dot", "secret"), None);
+    }
+
+    #[test]
+    fn unsign_splits_at_the_last_dot() {
+        let signed = format!("{}.{}", "a.b", sign("a.b", "secret"));
+        assert_eq!(unsign(&signed, "secret").as_deref(), Some("a.b"));
+    }
+
+    #[test]
+    fn base64_nopad_handles_partial_chunks() {
+        assert_eq!(base64_nopad(b"f"), "Zg");
+        assert_eq!(base64_nopad(b"fo"), "Zm8");
+        assert_eq!(base64_nopad(b"foo"), "Zm9v");
+    }
+
+    #[test]
+    fn parse_undecoded_keeps_percent_escapes() {
+        let cookies = parse_undecoded("a=hello%20world");
+        assert_eq!(cookies.get("a").map(String::as_str), Some("hello%20world"));
     }
 
     #[test]

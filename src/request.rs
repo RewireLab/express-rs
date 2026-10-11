@@ -155,6 +155,32 @@ impl Request {
         }
     }
 
+    /// The cookies whose signature verifies against `secret`.
+    ///
+    /// Signed values go out as `s:<value>.<hmac>`; only ones that
+    /// verify appear here, and they are returned percent-decoded.
+    /// Tampered and unsigned cookies stay in [`cookies()`](Self::cookies)
+    /// where cookie-parser would drop them — decide per call site.
+    pub fn signed_cookies(&self, secret: &str) -> HashMap<String, String> {
+        let raw = self
+            .headers
+            .get_all("cookie")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect::<Vec<_>>()
+            .join("; ");
+
+        let mut map = HashMap::new();
+        for (name, value) in cookies::parse_undecoded(&raw) {
+            if let Some(signed) = value.strip_prefix("s:") {
+                if let Some(unsigned) = cookies::unsign(signed, secret) {
+                    map.insert(name, cookies::decode_component(&unsigned));
+                }
+            }
+        }
+        map
+    }
+
     /// True when the request carries a body.
     ///
     /// Mirrors `type-is`'s `hasBody`: a `Transfer-Encoding` header means a
