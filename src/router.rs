@@ -99,11 +99,20 @@ struct RouterState {
     next_called: bool,
     skip_to_route: bool,
     error: Option<Error>,
+    /// Parameter callbacks already run for this request, with the error
+    /// one of them produced, if any. A name present here is not run
+    /// again, which is what keeps a validation callback from firing
+    /// twice when several layers bind the same parameter.
+    param_outcomes: HashMap<String, Option<Error>>,
 }
 
 /// The router.
 pub struct Router {
     stack: Vec<Layer>,
+    /// Parameter callbacks by name, as `app.param()`. Consulted at
+    /// dispatch time, so a callback registered after a route still
+    /// applies to it.
+    param_callbacks: HashMap<String, RequestHandler>,
     case_sensitive: bool,
     strict: bool,
 }
@@ -113,6 +122,7 @@ impl Router {
     pub fn new() -> Self {
         Self {
             stack: Vec::new(),
+            param_callbacks: HashMap::new(),
             case_sensitive: false,
             strict: false,
         }
@@ -122,9 +132,26 @@ impl Router {
     pub fn with_options(case_sensitive: bool, strict: bool) -> Self {
         Self {
             stack: Vec::new(),
+            param_callbacks: HashMap::new(),
             case_sensitive,
             strict,
         }
+    }
+
+    /// Register a parameter callback, as `app.param()`.
+    ///
+    /// The callback runs before the handlers of any matched layer that
+    /// binds a parameter of this name, and at most once per request.
+    /// It reads the bound value from `params`, calls `next()` to
+    /// proceed, returns its own response to short-circuit, and returns
+    /// `Err` to reach the error middleware.
+    pub fn param<F, Fut>(&mut self, name: &str, handler: F)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.param_callbacks
+            .insert(name.to_string(), boxed_request(handler));
     }
 
     /// Enable case-sensitive routing.
@@ -286,6 +313,7 @@ impl Router {
             next_called: true,
             skip_to_route: false,
             error: None,
+            param_outcomes: HashMap::new(),
         }));
         let mut res = res;
 
@@ -367,6 +395,43 @@ impl Router {
                 }
             }
 
+            // Parameter callbacks run for every matched layer whose
+            // bound parameters name one, before the layer's own
+            // handlers — as `process_params` does in the original
+            // router, for routes and middleware alike.
+            if !self.param_callbacks.is_empty() {
+                let wanted: Vec<String> = layer
+                    .pattern
+                    .param_names()
+                    .into_iter()
+                    .filter(|n| params.contains_key(n) && self.param_callbacks.contains_key(n))
+                    .collect();
+
+                if !wanted.is_empty() {
+                    state.lock().unwrap().next_called = false;
+                    match self
+                        .run_param_callbacks(&state, &req, res, &params, wanted)
+                        .await
+                    {
+                        ParamRun::Failed => {
+                            // The failing callback consumed the response;
+                            // rebuild it as the Err arm below does.
+                            res = Response::new();
+                            continue;
+                        }
+                        ParamRun::Proceed(next_res) => {
+                            res = next_res;
+                            if !state.lock().unwrap().next_called {
+                                // A callback returned a final response
+                                // without calling next; the loop top
+                                // returns it.
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+
             state.lock().unwrap().next_called = false;
 
             let outcome = match &layer.handler {
@@ -420,6 +485,83 @@ impl Router {
                 }
             }
         }
+    }
+}
+
+/// What running the parameter callbacks decided.
+enum ParamRun {
+    /// Every callback called `next()`; the layer's handlers may run.
+    Proceed(Response),
+    /// An error is now pending; skip the layer and let the error flow.
+    Failed,
+}
+
+impl Router {
+    /// Run the parameter callbacks for a matched layer, in path order.
+    ///
+    /// A name already run for this request is skipped — unless it
+    /// failed, in which case the failure is replayed into the error
+    /// state so no later layer can proceed either.
+    async fn run_param_callbacks(
+        &self,
+        state: &Arc<Mutex<RouterState>>,
+        req: &Arc<Request>,
+        mut res: Response,
+        params: &Params,
+        names: Vec<String>,
+    ) -> ParamRun {
+        for name in names {
+            if let Some(cached) = state.lock().unwrap().param_outcomes.get(&name).cloned() {
+                if let Some(err) = cached {
+                    let mut s = state.lock().unwrap();
+                    s.error = Some(err);
+                    s.next_called = true;
+                    return ParamRun::Failed;
+                }
+                continue;
+            }
+
+            let callback = match self.param_callbacks.get(&name) {
+                Some(cb) => cb.clone(),
+                None => continue,
+            };
+
+            state.lock().unwrap().next_called = false;
+
+            let state_clone = state.clone();
+            let next: Next = Arc::new(move |call| {
+                let state = state_clone.clone();
+                Box::pin(async move { apply_next_call(&state, call) })
+            });
+
+            match callback(req.clone(), res, next, params.clone()).await {
+                Ok(next_res) => {
+                    res = next_res;
+                    let called_next = state.lock().unwrap().next_called;
+                    state.lock().unwrap().param_outcomes.insert(name, None);
+                    if !called_next {
+                        // A callback that never calls next owns the
+                        // response; the loop top sees next_called off and
+                        // returns it.
+                        return ParamRun::Proceed(res);
+                    }
+                }
+                Err(err) => {
+                    let mut s = state.lock().unwrap();
+                    s.param_outcomes.insert(name, Some(err.clone()));
+                    s.error = Some(err);
+                    s.next_called = true;
+                    drop(s);
+                    return ParamRun::Failed;
+                }
+            }
+        }
+
+        // Reaching here, every callback that ran called next(); the
+        // cached skips never touched the flag, so restore it for the
+        // layer's own handlers.
+        state.lock().unwrap().next_called = true;
+        ParamRun::Proceed(res)
     }
 }
 

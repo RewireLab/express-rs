@@ -4921,3 +4921,139 @@ async fn test_zstd_body_over_the_limit_is_413() {
         response
     );
 }
+
+// ============================================================
+// Phase 14: Parameter Callback Tests (app.param)
+// ============================================================
+
+#[tokio::test]
+async fn test_param_callback_runs_before_the_route() {
+    let port = start_server(|app| {
+        app.param("id", |_req, mut res, next, _params| async move {
+            res.append("x-order", "param");
+            next(express_rs::router::NextCall::Continue).await;
+            Ok(res)
+        });
+        app.get("/users/:id", |_req, mut res, _next, params| async move {
+            res.append("x-order", "route");
+            res.send(params.get("id").map_or("", |v| v));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/users/7", None).await;
+    assert!(
+        response.contains("x-order: param, route"),
+        "Expected param before route, got: {}",
+        response
+    );
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(body, "7");
+}
+
+#[tokio::test]
+async fn test_param_callback_error_reaches_error_middleware() {
+    let port = start_server(|app| {
+        app.param("id", |_req, res, next, params| async move {
+            let valid = params
+                .get("id")
+                .and_then(|v| v.parse::<u64>().ok())
+                .is_some();
+            if valid {
+                next(express_rs::router::NextCall::Continue).await;
+                Ok(res)
+            } else {
+                Err(express_rs::Error::with_status(400, "invalid id"))
+            }
+        });
+        app.get("/users/:id", |_req, mut res, _next, _params| async move {
+            res.send("route reached");
+            Ok(res)
+        });
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.status(err.status()).send(&err.message());
+            Ok(res)
+        });
+    })
+    .await;
+
+    let bad = request(port, "GET", "/users/abc", None).await;
+    assert!(bad.contains("400 Bad Request"), "got: {}", bad);
+    assert!(
+        bad.contains("invalid id"),
+        "Expected the callback error, got: {}",
+        bad
+    );
+    assert!(
+        !bad.contains("route reached"),
+        "The route must not run after a failed callback, got: {}",
+        bad
+    );
+
+    let good = request(port, "GET", "/users/5", None).await;
+    assert!(
+        good.contains("route reached"),
+        "Expected the route to run, got: {}",
+        good
+    );
+}
+
+#[tokio::test]
+async fn test_param_callback_runs_once_per_request() {
+    let port = start_server(|app| {
+        app.param("id", |_req, mut res, next, _params| async move {
+            res.append("x-trace", "P");
+            next(express_rs::router::NextCall::Continue).await;
+            Ok(res)
+        });
+        app.use_with_path("/u/:id", |_req, mut res, next, _params| async move {
+            res.append("x-trace", "M");
+            next(express_rs::router::NextCall::Continue).await;
+            Ok(res)
+        });
+        app.get("/u/:id", |_req, mut res, _next, _params| async move {
+            res.append("x-trace", "R");
+            res.send("done");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/u/9", None).await;
+    assert!(
+        response.contains("x-trace: P, M, R"),
+        "Expected the callback exactly once, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_param_callback_short_circuits_without_next() {
+    let port = start_server(|app| {
+        app.param("id", |_req, mut res, next, params| async move {
+            if params.get("id").is_some_and(|v| v == "blocked") {
+                res.status(401).send("blocked by callback");
+                return Ok(res);
+            }
+            next(express_rs::router::NextCall::Continue).await;
+            Ok(res)
+        });
+        app.get("/items/:id", |_req, mut res, _next, _params| async move {
+            res.send("route reached");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let blocked = request(port, "GET", "/items/blocked", None).await;
+    assert!(blocked.contains("401 Unauthorized"), "got: {}", blocked);
+    assert!(
+        !blocked.contains("route reached"),
+        "The route must not run, got: {}",
+        blocked
+    );
+
+    let passed = request(port, "GET", "/items/open", None).await;
+    assert!(passed.contains("route reached"), "got: {}", passed);
+}

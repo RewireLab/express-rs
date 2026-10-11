@@ -96,6 +96,23 @@ impl PathPattern {
     /// pattern in which every group is required. That makes
     /// `/:name{.:format}` prefer binding `name` and `format` on
     /// `/foo.json` instead of greedily swallowing the dot into `name`.
+    /// The parameter and wildcard names this pattern binds, in path
+    /// order, including those inside optional groups.
+    pub fn param_names(&self) -> Vec<String> {
+        fn walk(segments: &[Segment], out: &mut Vec<String>) {
+            for seg in segments {
+                match seg {
+                    Segment::Param(name) | Segment::Wildcard(name) => out.push(name.clone()),
+                    Segment::Optional(inner) => walk(inner, out),
+                    Segment::Static(_) => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.segments, &mut out);
+        out
+    }
+
     pub fn match_path(&self, path: &str) -> Option<HashMap<String, String>> {
         let mut cur = Cursor::new(path);
         let mut params = HashMap::new();

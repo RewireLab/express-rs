@@ -10,7 +10,7 @@ The point of express-rs is to *rewire* an existing idea and learn from the proce
 
 ## Status
 
-**Phase 13: zstd content encoding** — complete.
+**Phase 14: Parameter callbacks** — complete.
 
 The framework currently provides:
 
@@ -42,6 +42,7 @@ The framework currently provides:
 - **File sending:** `static_files::send_file()` and `download()` with root confinement, dotfile policy, conditional requests, and ranges
 - **Content negotiation:** `response::format()` picks a body by `Accept`, with extension keys, a default fallback, `Vary: Accept`, and 406 when nothing matches
 - **Raw bodies:** `body::raw()` stores the undecoded bytes behind content-type gating, size limits, and inflation
+- **Parameter callbacks:** `app.param()` runs before any matched layer binding that name, at most once per request
 
 ## Quick Start
 
@@ -143,6 +144,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | **Root confinement for `send_file`** | Express resolves through `path.resolve`, which lets an absolute `path` bypass the `root` option entirely. Here an absolute path with a root is refused, and the resolved file must stay under the root — the same stance the static middleware takes on symlinks. |
 | **Manual `Default` for option structs** | A derived `Default` zeroed every flag once already (`StaticOptions` in the static-files phase); `SendFileOptions` carries a hand-written impl so the send defaults — ETag, freshness, ranges, cache-control all on — survive. |
 | **`format()` is a free function** | It must read the request's `Accept` header, and a `Response` method cannot see the request — the same reason finalisation lives in the server. `response::format(&req, res, |f| ...)`. |
+| **Parameter callbacks dispatched, not layered** | `app.param()` callbacks are not stack layers; the router consults the registry when a layer's bound params name one, then runs the callback inline before that layer's handlers — which is how a callback registered after a route still applies, and how the once-per-request cache works. |
 
 ### Dependencies
 
@@ -205,7 +207,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `req.fresh()` | ✅ | ETag branch; date comparison not implemented |
 | Strict routing | ⚠️ | flag accepted, not enforced |
 | `next('router')` | ❌ | not implemented |
-| `app.param()` callbacks | ❌ | not implemented |
+| `app.param()` callbacks | ✅ | one name per call; the value arrives in `params` |
 | `res.cookie()` | ✅ | `CookieOptions` carries the attributes |
 | `res.clearCookie()` | ✅ | `clear_cookie()`; forces epoch expiry |
 | Cookie parsing (`req.cookies`) | ✅ | built in; Express needs the `cookie-parser` middleware |
@@ -281,6 +283,13 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 - `Content-Disposition` is a subset of the `content-disposition` package: names within ISO-8859-1 are quoted with `"` and `\` escaped; names outside it gain a percent-encoded `filename*` parameter with a `_`-substituted fallback.
 - `download()` sets the header before sending, so a send failure discards it, exactly as Express loses the header to `next(err)`.
 
+### Known differences in parameter callbacks
+
+- The bound value arrives in `params` rather than as dedicated `value`/`name` arguments, since the callback shape is the same as any middleware's.
+- One name per call: Express's `app.param(['id', 'user'], fn)` is two `app.param` calls here.
+- A callback may return its response without calling `next()`, which short-circuits the layer; in Express that shape would hang, because `next` is the only way forward.
+- While an error from a callback is pending, later layers are skipped; once an error handler clears it, a later matching layer replays the stored failure — the same outcome Express produces.
+
 ### Known differences in content negotiation
 
 - Handlers receive the `Response` only. Express passes `(req, res, next)`; here the request is in scope at the call site, and `next` has no equivalent — the handler returns the response or an `Err`.
@@ -298,7 +307,7 @@ cargo test
 Integration tests start a real server on a random port and make actual HTTP requests over TCP.
 
 - 117 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, cookies, content disposition, and type normalisation
-- 159 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing (including raw), static files, cookies, file sending, and content negotiation
+- 163 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing (including raw), static files, cookies, file sending, content negotiation, and parameter callbacks
 
 ```bash
 cargo fmt --check   # formatting

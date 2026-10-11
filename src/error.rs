@@ -24,7 +24,7 @@ pub enum Error {
 }
 
 /// An error raised by application code.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AppError {
     message: String,
     status: Option<u16>,
@@ -33,6 +33,18 @@ pub struct AppError {
     /// Express attaches `.type` to errors from body parsing. The name
     /// `kind` avoids confusion with the Rust `type` keyword.
     kind: Option<String>,
+}
+
+impl Clone for Error {
+    fn clone(&self) -> Self {
+        match self {
+            Error::App(app) => Error::App(app.clone()),
+            // The wrapper variants hold error types that are not
+            // themselves cloneable; a clone degrades to an app error
+            // carrying the source's display text.
+            other => Error::new(other.to_string()),
+        }
+    }
 }
 
 impl Error {
