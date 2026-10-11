@@ -3761,3 +3761,278 @@ async fn test_static_symlink_escape_is_blocked() {
         response
     );
 }
+
+// ============================================================
+// Phase 9: Cookie Tests
+// ============================================================
+
+#[tokio::test]
+async fn test_cookie_defaults_to_path_root() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.cookie(
+                "sid",
+                "abc123",
+                &express_rs::cookies::CookieOptions::default(),
+            );
+            res.send("ok");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("set-cookie: sid=abc123; Path=/"),
+        "Expected default Set-Cookie, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_cookie_encodes_the_value() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.cookie(
+                "sid",
+                "a b&c=d",
+                &express_rs::cookies::CookieOptions::default(),
+            );
+            res.send("ok");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("set-cookie: sid=a%20b%26c%3Dd; Path=/"),
+        "Expected encoded value, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_cookie_sends_attributes() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            let options = express_rs::cookies::CookieOptions {
+                max_age_secs: Some(3600),
+                path: Some("/app".to_string()),
+                domain: Some("example.com".to_string()),
+                secure: true,
+                http_only: true,
+                same_site: Some(express_rs::cookies::SameSite::Strict),
+                ..Default::default()
+            };
+            res.cookie("sid", "abc", &options);
+            res.send("ok");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("set-cookie: sid=abc; Domain=example.com; Path=/app; Expires="),
+        "Expected attribute order, got: {}",
+        response
+    );
+    for attribute in ["Max-Age=3600", "HttpOnly", "Secure", "SameSite=Strict"] {
+        assert!(
+            response.contains(attribute),
+            "Expected {}, got: {}",
+            attribute,
+            response
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_multiple_cookies_are_separate_headers() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            let options = express_rs::cookies::CookieOptions::default();
+            res.cookie("sid", "a", &options);
+            res.cookie("theme", "dark", &options);
+            res.send("ok");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("set-cookie: sid=a; Path=/"),
+        "Expected first cookie, got: {}",
+        response
+    );
+    assert!(
+        response.contains("set-cookie: theme=dark; Path=/"),
+        "Expected second cookie on its own header, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_clear_cookie_sends_epoch_expiry() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.clear_cookie("sid", &express_rs::cookies::CookieOptions::default());
+            res.send("ok");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("set-cookie: sid=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT"),
+        "Expected epoch expiry, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("Max-Age"),
+        "clear_cookie must not carry a lifetime, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_request_cookies_are_parsed() {
+    let port = start_server(|app| {
+        app.get("/echo", |req, mut res, _next, _params| async move {
+            let cookies = req.cookies();
+            let mut names: Vec<&String> = cookies.keys().collect();
+            names.sort();
+            let mut body = String::new();
+            for name in names {
+                body.push_str(&format!("{}={}; ", name, cookies.get(name).unwrap()));
+            }
+            res.send(body.trim_end());
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "GET",
+        "/echo",
+        &[("Cookie", "sid=abc123; theme=dark%20mode")],
+        None,
+    )
+    .await;
+    assert!(
+        response.contains("sid=abc123"),
+        "Expected parsed sid, got: {}",
+        response
+    );
+    assert!(
+        response.contains("theme=dark mode"),
+        "Expected percent-decoded theme, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_request_cookies_quoting_and_duplicates() {
+    let port = start_server(|app| {
+        app.get("/echo", |req, mut res, _next, _params| async move {
+            let cookies = req.cookies();
+            let quoted = cookies.get("a").map(String::as_str).unwrap_or("missing");
+            let empty = cookies.get("b").map(String::as_str).unwrap_or("missing");
+            let flag = cookies.contains_key("flag");
+            res.send(&format!("a={} b={} flag={}", quoted, empty, flag));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "GET",
+        "/echo",
+        &[("Cookie", "a=\"quoted value\"; b=; flag; a=second")],
+        None,
+    )
+    .await;
+    assert!(
+        response.contains("a=quoted value"),
+        "Expected quotes stripped, got: {}",
+        response
+    );
+    assert!(
+        response.contains("b= flag=false"),
+        "Expected empty b and skipped flag, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("a=second"),
+        "First duplicate must win, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_request_without_cookies_is_empty() {
+    let port = start_server(|app| {
+        app.get("/echo", |req, mut res, _next, _params| async move {
+            res.send(&format!("count={}", req.cookies().len()));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/echo", None).await;
+    assert!(
+        response.contains("count=0"),
+        "Expected no cookies, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_cookie_round_trip_through_the_client() {
+    let port = start_server(|app| {
+        app.get("/set", |_req, mut res, _next, _params| async move {
+            res.cookie(
+                "sess",
+                "héllo wörld & =",
+                &express_rs::cookies::CookieOptions::default(),
+            );
+            res.send("ok");
+            Ok(res)
+        });
+        app.get("/echo", |req, mut res, _next, _params| async move {
+            let value = req.cookies().get("sess").cloned().unwrap_or_default();
+            res.send(&value);
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/set", None).await;
+    let sent = response
+        .split("set-cookie: sess=")
+        .nth(1)
+        .and_then(|rest| rest.split("\r\n").next())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        sent.contains("%C3%A9"),
+        "Expected encoded value, got: {}",
+        sent
+    );
+
+    let response = request_raw(
+        port,
+        "GET",
+        "/echo",
+        &[("Cookie", &format!("sess={}", sent))],
+        None,
+    )
+    .await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("");
+    assert_eq!(body, "héllo wörld & =");
+}
