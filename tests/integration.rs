@@ -5173,3 +5173,137 @@ async fn test_route_error_handler_can_continue() {
         response
     );
 }
+
+// ============================================================
+// Phase 16: Mounted Router Tests
+// ============================================================
+
+use express_rs::router::Router as SubRouter;
+
+#[tokio::test]
+async fn test_mounted_router_serves_relative_paths() {
+    let port = start_server(|app| {
+        let mut api = SubRouter::new();
+        api.get("/users", |_req, mut res, _next, _params| async move {
+            res.send("all users");
+            Ok(res)
+        });
+        api.get("/users/:id", |_req, mut res, _next, params| async move {
+            res.send(&format!("user {}", params.get("id").map_or("", |v| v)));
+            Ok(res)
+        });
+        app.mount("/api", api);
+    })
+    .await;
+
+    let response = request(port, "GET", "/api/users", None).await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(body, "all users", "got: {}", response);
+
+    let response = request(port, "GET", "/api/users/9", None).await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(body, "user 9", "got: {}", response);
+}
+
+#[tokio::test]
+async fn test_mounted_router_falls_through_to_parent() {
+    let port = start_server(|app| {
+        let mut api = SubRouter::new();
+        api.get("/a", |_req, mut res, _next, _params| async move {
+            res.send("sub a");
+            Ok(res)
+        });
+        app.mount("/api", api);
+        app.get("/api/b", |_req, mut res, _next, _params| async move {
+            res.send("parent b");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/api/a", None).await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(body, "sub a");
+
+    let response = request(port, "GET", "/api/b", None).await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(
+        body, "parent b",
+        "Expected parent fallthrough, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_next_router_exits_to_parent() {
+    let port = start_server(|app| {
+        let mut api = SubRouter::new();
+        api.r#use(|_req, mut res, next, _params| async move {
+            res.set("x-from", "sub-middleware");
+            next(express_rs::router::NextCall::Router).await;
+            Ok(res)
+        });
+        api.get("/x", |_req, mut res, _next, _params| async move {
+            res.send("sub x");
+            Ok(res)
+        });
+        app.mount("/api", api);
+        app.get("/api/x", |_req, mut res, _next, _params| async move {
+            res.send("parent x");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/api/x", None).await;
+    assert!(
+        response.contains("x-from: sub-middleware"),
+        "Expected the sub middleware to run, got: {}",
+        response
+    );
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(
+        body, "parent x",
+        "next('router') must skip the sub route, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_mounted_error_reaches_parent_error_handler() {
+    let port = start_server(|app| {
+        let mut api = SubRouter::new();
+        api.get("/forbidden", |_req, _res, _next, _params| async move {
+            Err(express_rs::Error::with_status(403, "sub says no"))
+        });
+        app.mount("/api", api);
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.status(err.status())
+                .send(&format!("parent: {}", err.message()));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/api/forbidden", None).await;
+    assert!(response.contains("403 Forbidden"), "got: {}", response);
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(body, "parent: sub says no", "got: {}", response);
+}
+
+#[tokio::test]
+async fn test_mount_params_reach_sub_routes() {
+    let port = start_server(|app| {
+        let mut api = SubRouter::new();
+        api.get("/users", |_req, mut res, _next, params| async move {
+            res.send(&format!("org={}", params.get("org").map_or("none", |v| v)));
+            Ok(res)
+        });
+        app.mount("/org/:org", api);
+    })
+    .await;
+
+    let response = request(port, "GET", "/org/acme/users", None).await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(body, "org=acme", "got: {}", response);
+}
