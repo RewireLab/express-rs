@@ -2,12 +2,13 @@
 //!
 //! Mirrors the parts of Express's `res` object that make sense in Rust:
 //! status, header manipulation, content type, `send()`, `json()`,
-//! `sendStatus()`, `location()`, `redirect()`, and `vary()`.
+//! `sendStatus()`, `location()`, `redirect()`, `vary()`, and `cookie()`.
 //!
 //! Unlike Express, the handler takes ownership of the `Response`, mutates
 //! it, and returns it. Borrowing a `&mut Response` across an `await` point
 //! is what this avoids.
 
+use crate::cookies::{self, CookieOptions};
 use crate::error::Error;
 use crate::etag;
 use crate::mime;
@@ -235,6 +236,37 @@ impl Response {
         self.set("content-length", &body.len().to_string());
         self.body = Some(Bytes::from(body));
         self
+    }
+
+    /// Set a cookie on the response.
+    ///
+    /// The value is percent-encoded the way Express's default
+    /// `encodeURIComponent` encoder is. Attributes come from
+    /// [`CookieOptions`], whose `Path` defaults to `/`. Several cookies
+    /// can be set; each becomes its own `Set-Cookie` header, which is
+    /// why this does not go through `append()` (it comma-joins).
+    ///
+    /// A name with characters a cookie cannot carry is skipped instead
+    /// of throwing the `TypeError` Express throws.
+    pub fn cookie(&mut self, name: &str, value: &str, options: &CookieOptions) -> &mut Self {
+        let encoded = cookies::encode_component(value);
+        if let Some(field) = cookies::serialize(name, &encoded, options) {
+            if let Ok(v) = HeaderValue::from_str(&field) {
+                self.headers
+                    .append(HeaderName::from_static("set-cookie"), v);
+            }
+        }
+        self
+    }
+
+    /// Clear a cookie by sending it expired with an empty value.
+    ///
+    /// `path` and `domain` must match those the cookie was set with,
+    /// so they pass through from `options`. The epoch expiry Express
+    /// forces is applied here; a caller-supplied `max_age` is dropped
+    /// because a future lifetime cannot clear anything.
+    pub fn clear_cookie(&mut self, name: &str, options: &CookieOptions) -> &mut Self {
+        self.cookie(name, "", &cookies::clear_options(options))
     }
 
     /// Add `field` to the `Vary` header if it is not already there.

@@ -37,6 +37,7 @@
 
 pub mod app;
 pub mod body;
+pub mod cookies;
 pub mod error;
 pub mod etag;
 pub mod mime;
