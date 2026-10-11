@@ -145,6 +145,31 @@ impl App {
         self.router.use_with_path(path, handler);
     }
 
+    /// Register a parameter callback, as `app.param()`.
+    ///
+    /// The callback runs before the handlers of any matched layer that
+    /// binds a parameter of this name, and at most once per request.
+    /// It reads the bound value from `params`, calls `next()` to
+    /// proceed, returns its own response to short-circuit, and returns
+    /// `Err` to reach the error middleware.
+    ///
+    /// ```ignore
+    /// app.param("id", |req, mut res, next, params| async move {
+    ///     if params.get("id").map_or(true, |v| v.parse::<u64>().is_err()) {
+    ///         return Err(Error::with_status(400, "invalid id"));
+    ///     }
+    ///     next(NextCall::Continue).await;
+    ///     Ok(res)
+    /// });
+    /// ```
+    pub fn param<F, Fut>(&mut self, name: &str, handler: F)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.router.param(name, handler);
+    }
+
     /// Register error-handling middleware.
     ///
     /// Takes the error as its first argument, which is what distinguishes
