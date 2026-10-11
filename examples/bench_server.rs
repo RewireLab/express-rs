@@ -4,8 +4,8 @@
 //! four benchmark endpoints on port 3001, mirroring bench/express_app.js
 //! endpoint for endpoint.
 
-use express_rs::App;
 use express_rs::router::NextCall;
+use express_rs::App;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
