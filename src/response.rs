@@ -2,7 +2,8 @@
 //!
 //! Mirrors the parts of Express's `res` object that make sense in Rust:
 //! status, header manipulation, content type, `send()`, `json()`,
-//! `sendStatus()`, `location()`, `redirect()`, `vary()`, and `cookie()`.
+//! `sendStatus()`, `location()`, `redirect()`, `vary()`, `cookie()`,
+//! and the `res.format()` content negotiation.
 //!
 //! Unlike Express, the handler takes ownership of the `Response`, mutates
 //! it, and returns it. Borrowing a `&mut Response` across an `await` point
@@ -533,6 +534,111 @@ impl Default for Response {
     }
 }
 
+/// A body writer for one offered type, as an object value in
+/// Express's `res.format()`.
+pub type FormatHandler = Box<dyn FnOnce(Response) -> Result<Response, Error> + Send>;
+
+/// Collects the offered type handlers for [`format`].
+pub struct FormatBuilder {
+    handlers: Vec<(String, FormatHandler)>,
+    fallback: Option<FormatHandler>,
+}
+
+impl FormatBuilder {
+    fn new() -> Self {
+        Self {
+            handlers: Vec::new(),
+            fallback: None,
+        }
+    }
+
+    /// Register a handler for a type or an extension, as a key in
+    /// Express's `res.format` object.
+    pub fn on(
+        mut self,
+        type_: &str,
+        handler: impl FnOnce(Response) -> Result<Response, Error> + Send + 'static,
+    ) -> Self {
+        self.handlers.push((type_.to_string(), Box::new(handler)));
+        self
+    }
+
+    /// Register the fallback handler, as the `default` key.
+    pub fn default(
+        mut self,
+        handler: impl FnOnce(Response) -> Result<Response, Error> + Send + 'static,
+    ) -> Self {
+        self.fallback = Some(Box::new(handler));
+        self
+    }
+}
+
+/// Negotiate the body against the request's `Accept` header, as
+/// `res.format()`.
+///
+/// The registration closure receives the builder; each `on` key is a
+/// full type or an extension, and `default` runs when nothing matches.
+/// `Vary: Accept` is set before any handler runs, exactly as Express
+/// sets it before consulting the header. With no match and no default
+/// the returned error is the 406 Express forwards to `next(err)`:
+///
+/// ```ignore
+/// response::format(&req, res, |f| {
+///     f.on("json", |res| Ok(res.json(&todo)))
+///      .on("html", |res| Ok(res.send("<ul>...</ul>")))
+///      .default(|res| Ok(res.send("plain fallback")))
+/// })?;
+/// ```
+pub fn format<F>(req: &Request, res: Response, register: F) -> Result<Response, Error>
+where
+    F: FnOnce(FormatBuilder) -> FormatBuilder,
+{
+    let builder = register(FormatBuilder::new());
+    let keys: Vec<&str> = builder.handlers.iter().map(|(k, _)| k.as_str()).collect();
+
+    let mut res = res;
+    res.vary("Accept");
+
+    let chosen = if keys.is_empty() {
+        None
+    } else {
+        req.accepts(&keys)
+    };
+
+    match chosen {
+        Some(key) => {
+            res.set("content-type", &normalize_type(&key));
+            let (_, handler) = builder
+                .handlers
+                .into_iter()
+                .find(|(k, _)| k == &key)
+                .ok_or_else(|| Error::with_status(406, "Not Acceptable"))?;
+            handler(res)
+        }
+        None => match builder.fallback {
+            Some(handler) => handler(res),
+            None => Err(Error::with_status(406, "Not Acceptable")),
+        },
+    }
+}
+
+/// Expand a key the way Express's `normalizeType` does: an extension
+/// becomes its MIME type, and parameters are stripped so the handler
+/// starts from a bare type.
+fn normalize_type(value: &str) -> String {
+    let expanded = if value.contains('/') {
+        value.to_string()
+    } else {
+        mime::content_type(value).unwrap_or_else(|| value.to_string())
+    };
+    expanded
+        .split(';')
+        .next()
+        .unwrap_or(&expanded)
+        .trim()
+        .to_string()
+}
+
 /// The standard reason phrase for a status code.
 ///
 /// Falls back to the numeric code, as Express's `statuses` package does.
@@ -711,5 +817,23 @@ mod tests {
     #[test]
     fn zero_quality_excludes() {
         assert!(!accepts_type("text/html;q=0", "text/html"));
+    }
+
+    #[test]
+    fn normalize_type_expands_extensions_without_params() {
+        assert_eq!(normalize_type("json"), "application/json");
+        assert_eq!(normalize_type("html"), "text/html");
+        assert_eq!(normalize_type("png"), "image/png");
+    }
+
+    #[test]
+    fn normalize_type_strips_params_from_full_types() {
+        assert_eq!(normalize_type("application/json"), "application/json");
+        assert_eq!(normalize_type("text/html; charset=iso-8859-1"), "text/html");
+    }
+
+    #[test]
+    fn normalize_type_keeps_unknown_extensions() {
+        assert_eq!(normalize_type("nope"), "nope");
     }
 }
