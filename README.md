@@ -10,7 +10,7 @@ The point of express-rs is to *rewire* an existing idea and learn from the proce
 
 ## Status
 
-**Phase 11: Content negotiation** — complete.
+**Phase 12: Raw bodies** — complete.
 
 The framework currently provides:
 
@@ -41,6 +41,7 @@ The framework currently provides:
 - **Cookies:** `res.cookie()` and `res.clear_cookie()` with attribute options, and built-in `req.cookies()` parsing
 - **File sending:** `static_files::send_file()` and `download()` with root confinement, dotfile policy, conditional requests, and ranges
 - **Content negotiation:** `response::format()` picks a body by `Accept`, with extension keys, a default fallback, `Vary: Accept`, and 406 when nothing matches
+- **Raw bodies:** `body::raw()` stores the undecoded bytes behind content-type gating, size limits, and inflation
 
 ## Quick Start
 
@@ -213,7 +214,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `res.download()` | ✅ | `static_files::download()`; `Content-Disposition` attachment |
 | Body parsing (JSON, text, form) | ✅ | `body::json()`, `body::text()`, `body::urlencoded()` |
 | Extended form nesting | ⚠️ | `a[b]` subset, not full `qs` |
-| Raw bodies | ❌ | no raw parser yet |
+| Raw bodies | ✅ | `body::raw()` |
 | `zstd` content encoding | ❌ | Node-gated in Express, unsupported here |
 | Static files | ✅ | `static_files::serve_static()` / `serve_static_at()` |
 | Dotfile policy | ✅ | ignore (default), allow, deny |
@@ -296,7 +297,7 @@ cargo test
 Integration tests start a real server on a random port and make actual HTTP requests over TCP.
 
 - 115 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, cookies, content disposition, and type normalisation
-- 154 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing, static files, cookies, file sending, and content negotiation
+- 157 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing (including raw), static files, cookies, file sending, and content negotiation
 
 ```bash
 cargo fmt --check   # formatting
