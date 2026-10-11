@@ -5307,3 +5307,239 @@ async fn test_mount_params_reach_sub_routes() {
     let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
     assert_eq!(body, "org=acme", "got: {}", response);
 }
+
+// ============================================================
+// Phase 17: Polish Tests
+// ============================================================
+
+#[tokio::test]
+async fn test_strict_routing_enforces_trailing_slashes() {
+    let port = start_server(|app| {
+        app.strict();
+        app.get("/app", |_req, mut res, _next, _params| async move {
+            res.send("no slash");
+            Ok(res)
+        });
+        app.get("/app/", |_req, mut res, _next, _params| async move {
+            res.send("with slash");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/app", None).await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(body, "no slash");
+
+    let response = request(port, "GET", "/app/", None).await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(
+        body, "with slash",
+        "Strict mode must distinguish them, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_lenient_routing_still_tolerates_trailing_slashes() {
+    let port = start_server(|app| {
+        app.get("/app", |_req, mut res, _next, _params| async move {
+            res.send("either");
+            Ok(res)
+        });
+    })
+    .await;
+
+    for path in ["/app", "/app/"] {
+        let response = request(port, "GET", path, None).await;
+        let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+        assert_eq!(body, "either", "path {} must match by default", path);
+    }
+}
+
+#[tokio::test]
+async fn test_fresh_compares_if_modified_since() {
+    let port = start_server(|app| {
+        app.get("/file", |_req, mut res, _next, _params| async move {
+            let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+            res.set("last-modified", &httpdate::fmt_http_date(modified));
+            res.send("body");
+            Ok(res)
+        });
+    })
+    .await;
+
+    // Same instant: not modified since then.
+    let since = httpdate::fmt_http_date(
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+    );
+    let response = request_raw(port, "GET", "/file", &[("If-Modified-Since", &since)], None).await;
+    assert!(
+        response.contains("304 Not Modified"),
+        "Expected 304 for an unchanged resource, got: {}",
+        response
+    );
+
+    // An earlier If-Modified-Since: the resource changed after it.
+    let earlier = httpdate::fmt_http_date(
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000),
+    );
+    let response = request_raw(
+        port,
+        "GET",
+        "/file",
+        &[("If-Modified-Since", &earlier)],
+        None,
+    )
+    .await;
+    assert!(
+        response.contains("200 OK") && response.contains("body"),
+        "Expected a full 200, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_x_powered_by_is_sent_and_disableable() {
+    let port = start_server(|app| {
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.send("ok");
+            Ok(res)
+        });
+    })
+    .await;
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        response.contains("x-powered-by: Express"),
+        "Expected the default header, got: {}",
+        response
+    );
+
+    let port = start_server(|app| {
+        app.disable("x-powered-by");
+        app.get("/", |_req, mut res, _next, _params| async move {
+            res.send("ok");
+            Ok(res)
+        });
+    })
+    .await;
+    let response = request(port, "GET", "/", None).await;
+    assert!(
+        !response.contains("x-powered-by"),
+        "disable must remove the header, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_signed_cookies_round_trip_and_reject_tampering() {
+    let port = start_server(|app| {
+        app.get("/set", |_req, mut res, _next, _params| async move {
+            res.cookie_signed(
+                "sid",
+                "abc 123",
+                "s3cret",
+                &express_rs::cookies::CookieOptions::default(),
+            );
+            res.send("ok");
+            Ok(res)
+        });
+        app.get("/read", |req, mut res, _next, _params| async move {
+            let signed = req.signed_cookies("s3cret");
+            let value = signed.get("sid").map(String::as_str).unwrap_or("missing");
+            res.send(value);
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/set", None).await;
+    let cookie = response
+        .split("set-cookie: sid=")
+        .nth(1)
+        .and_then(|rest| rest.split("\r\n").next())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        cookie.starts_with("s:abc%20123."),
+        "Expected the s: prefix and encoding, got: {}",
+        cookie
+    );
+
+    // Round trip.
+    let response = request_raw(
+        port,
+        "GET",
+        "/read",
+        &[("Cookie", &format!("sid={}", cookie))],
+        None,
+    )
+    .await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(body, "abc 123", "got: {}", response);
+
+    // Tamper with the value: the signature must not verify.
+    let tampered = cookie.replace("abc%20123", "abc%20999");
+    let response = request_raw(
+        port,
+        "GET",
+        "/read",
+        &[("Cookie", &format!("sid={}", tampered))],
+        None,
+    )
+    .await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(
+        body, "missing",
+        "Tampered cookie must be excluded, got: {}",
+        response
+    );
+
+    // A wrong secret also excludes it.
+    let response = request_raw(
+        port,
+        "GET",
+        "/read",
+        &[("Cookie", "sid=s:abc%20123.deadbeef")],
+        None,
+    )
+    .await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
+    assert_eq!(body, "missing", "got: {}", response);
+}
+
+#[tokio::test]
+async fn test_attachment_sets_disposition_and_type() {
+    let port = start_server(|app| {
+        app.get("/pdf", |_req, mut res, _next, _params| async move {
+            res.attachment(Some("report.pdf"));
+            res.send("%PDF-data");
+            Ok(res)
+        });
+        app.get("/plain", |_req, mut res, _next, _params| async move {
+            res.attachment(None);
+            res.send("data");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/pdf", None).await;
+    assert!(
+        response.contains("content-disposition: attachment; filename=\"report.pdf\""),
+        "got: {}",
+        response
+    );
+    assert!(
+        response.contains("content-type: application/pdf"),
+        "Expected the type from the extension, got: {}",
+        response
+    );
+
+    let response = request(port, "GET", "/plain", None).await;
+    assert!(
+        response.contains("content-disposition: attachment\r\n"),
+        "Expected the bare form, got: {}",
+        response
+    );
+}
