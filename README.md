@@ -10,7 +10,7 @@ The point of express-rs is to *rewire* an existing idea and learn from the proce
 
 ## Status
 
-**Phase 12: Raw bodies** — complete.
+**Phase 13: zstd content encoding** — complete.
 
 The framework currently provides:
 
@@ -36,7 +36,7 @@ The framework currently provides:
 - **Content types:** extension resolution including Express 5's `text/javascript` for `.js`
 - **Error middleware:** `use_error_handler()`, `next(err)`, and a handler returning `Err` as the equivalent of a rejected promise
 - **Default error response:** 500 with the message, `Content-Security-Policy`, and `nosniff`, mirroring `finalhandler`
-- **Body parsing:** `body::json()`, `body::text()`, `body::urlencoded()` with content-type gating, `gzip`/`deflate`/`br` decompression, charset checks, size limits, and typed errors
+- **Body parsing:** `body::json()`, `body::text()`, `body::urlencoded()`, `body::raw()` with content-type gating, `gzip`/`deflate`/`br`/`zstd` decompression, charset checks, size limits, and typed errors
 - **Static files:** `static_files::serve_static()` and `serve_static_at()` with content types, `ETag`/`Last-Modified` caching, conditional requests, single ranges, index files, and trailing-slash redirects
 - **Cookies:** `res.cookie()` and `res.clear_cookie()` with attribute options, and built-in `req.cookies()` parsing
 - **File sending:** `static_files::send_file()` and `download()` with root confinement, dotfile policy, conditional requests, and ranges
@@ -130,7 +130,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | **`use_error_handler` instead of arity** | Express tells handlers and error handlers apart by `fn.length === 4`. Rust closures cannot be inspected that way, so the distinction lives in the signature: `use_error_handler` takes the error as its first parameter and the compiler enforces it. |
 | **Route layers skipped while an error is pending** | Express's `Router#handle` does `if (layerError) { match = false }`, so only middleware can catch an error. Replicated literally. |
 | **Parsed body behind a lock** | Handlers receive the request behind an `Arc`, so the parsed body lives in an `RwLock<Option<ParsedBody>>`. Parsers store it; handlers clone it out. |
-| **flate2 and brotli for decompression** | body-parser supports `gzip`, `deflate`, and `br` (plus `zstd` on new Node). `flate2` covers the first two from memory, `brotli` the third. |
+| **flate2, brotli, and zstd for decompression** | body-parser supports `gzip`, `deflate`, and `br` (plus `zstd` on new Node). `flate2` covers the first two from memory, `brotli` the third, `zstd` the last. |
 | **Decompression capped at limit + 1** | The size limit applies to the decompressed stream, as `raw-body` sees it. Reading is capped so a compression bomb cannot exhaust memory. |
 | **Hand-rolled form nesting** | `serde_urlencoded` stays flat, so extended `a[b]` nesting is a small parser with the same `parameterLimit` and `depth` defaults as `qs`. |
 | **Canonical confinement for static files** | `send` checks `..` lexically and follows symlinks wherever they lead. Paths here are canonicalized and must stay under the root, so a symlink escape answers 404. |
@@ -158,6 +158,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `serde` / `serde_json` | JSON serialisation for `res.json()` |
 | `sha1` | ETag generation |
 | `flate2` | `gzip` and `deflate` body decompression |
+| `zstd` | `zstd` body decompression |
 | `brotli` | `br` body decompression |
 | `httpdate` | `Last-Modified` formatting and `If-Modified-Since` parsing |
 
@@ -215,7 +216,7 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | Body parsing (JSON, text, form) | ✅ | `body::json()`, `body::text()`, `body::urlencoded()` |
 | Extended form nesting | ⚠️ | `a[b]` subset, not full `qs` |
 | Raw bodies | ✅ | `body::raw()` |
-| `zstd` content encoding | ❌ | Node-gated in Express, unsupported here |
+| `zstd` content encoding | ✅ | Express gates it on the Node version; always on here |
 | Static files | ✅ | `static_files::serve_static()` / `serve_static_at()` |
 | Dotfile policy | ✅ | ignore (default), allow, deny |
 | Directory index + redirect | ✅ | `index.html` default, 301 to trailing slash |
@@ -296,8 +297,8 @@ cargo test
 
 Integration tests start a real server on a random port and make actual HTTP requests over TCP.
 
-- 115 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, cookies, content disposition, and type normalisation
-- 157 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing (including raw), static files, cookies, file sending, and content negotiation
+- 117 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, cookies, content disposition, and type normalisation
+- 159 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing (including raw), static files, cookies, file sending, and content negotiation
 
 ```bash
 cargo fmt --check   # formatting
