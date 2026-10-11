@@ -135,19 +135,40 @@ impl PathPattern {
     /// Like [`match_path`](Self::match_path) but allows extra trailing
     /// segments, so `/api` matches `/api/users/123`.
     pub fn match_prefix(&self, path: &str) -> Option<HashMap<String, String>> {
+        self.prefix_match(path).map(|(params, _)| params)
+    }
+
+    /// Like [`match_prefix`](Self::match_prefix) but also returns the
+    /// path remainder after the matched prefix, starting with `/`.
+    ///
+    /// This is what a mounted router needs to hand its sub-path down.
+    pub fn match_prefix_rest(&self, path: &str) -> Option<(HashMap<String, String>, String)> {
+        let (params, consumed) = self.prefix_match(path)?;
+        let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let rest = if consumed >= segs.len() {
+            "/".to_string()
+        } else {
+            format!("/{}", segs[consumed..].join("/"))
+        };
+        Some((params, rest))
+    }
+
+    /// Match as a prefix, returning the bound parameters and the
+    /// number of path segments consumed.
+    fn prefix_match(&self, path: &str) -> Option<(HashMap<String, String>, usize)> {
         let mut cur = Cursor::new(path);
         let mut params = HashMap::new();
 
         if self.match_from(&mandatory(&self.segments), 0, &mut cur, &mut params)
             && cur.at_boundary()
         {
-            return Some(params);
+            return Some((params, cur.i));
         }
 
         let mut cur = Cursor::new(path);
         let mut params = HashMap::new();
         if self.match_from(&self.segments, 0, &mut cur, &mut params) && cur.at_boundary() {
-            return Some(params);
+            return Some((params, cur.i));
         }
 
         None

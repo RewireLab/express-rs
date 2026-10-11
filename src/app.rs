@@ -294,6 +294,26 @@ impl App {
         self.router.param(name, handler);
     }
 
+    /// Mount a sub-router at a path prefix, as `app.use('/api', apiRouter)`.
+    ///
+    /// Build the sub-router with [`express_rs::router::Router::new`] and
+    /// its ordinary `get`/`post`/`use` methods; its paths are relative
+    /// to the prefix. When the sub-router falls through without
+    /// answering, the parent's stack continues, and `next('router')`
+    /// from inside the sub-router exits it early.
+    ///
+    /// ```ignore
+    /// let mut api = express_rs::router::Router::new();
+    /// api.get("/users", |_req, mut res, _next, _params| async move {
+    ///     res.json(&users);
+    ///     Ok(res)
+    /// });
+    /// app.mount("/api", api);
+    /// ```
+    pub fn mount(&mut self, prefix: &str, router: Router) {
+        self.router.mount(prefix, router);
+    }
+
     /// Register error-handling middleware.
     ///
     /// Takes the error as its first argument, which is what distinguishes
