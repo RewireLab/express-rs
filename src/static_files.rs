@@ -316,7 +316,7 @@ pub async fn download(
             .unwrap_or_else(|| "download".to_string()),
     };
 
-    res.set("content-disposition", &content_disposition(&name));
+    res.attachment(Some(&name));
     send_file(req, res, path, options).await
 }
 
@@ -338,30 +338,6 @@ fn check_segments(path: &str, dotfiles: &Dotfiles) -> Result<(), Error> {
     }
 
     Ok(())
-}
-
-/// Build an `attachment` `Content-Disposition` value.
-///
-/// A subset of the `content-disposition` package: the name is quoted
-/// with `"` and `\` escaped, and a name carrying characters outside
-/// ISO-8859-1 gains a `filename*` parameter percent-encoded the way
-/// `encodeURIComponent` does, with a `_`-substituted fallback.
-fn content_disposition(filename: &str) -> String {
-    let latin1: String = filename
-        .chars()
-        .map(|c| if (c as u32) <= 0xFF { c } else { '_' })
-        .collect();
-    let quoted = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
-
-    if latin1 == filename {
-        format!("attachment; filename={}", quoted(filename))
-    } else {
-        format!(
-            "attachment; filename={}; filename*=UTF-8''{}",
-            quoted(&latin1),
-            crate::cookies::encode_component(filename)
-        )
-    }
 }
 
 /// Normalize a mount point: empty becomes `/`, trailing slashes go.
@@ -998,37 +974,5 @@ mod tests {
         assert_eq!(parse_range("bytes=abc", 1000), RangeOutcome::Full);
         assert_eq!(parse_range("bytes=0-1,3-4", 1000), RangeOutcome::Full);
         assert_eq!(parse_range("items=0-1", 1000), RangeOutcome::Full);
-    }
-
-    #[test]
-    fn content_disposition_quotes_ascii_names() {
-        assert_eq!(
-            content_disposition("report.txt"),
-            "attachment; filename=\"report.txt\""
-        );
-    }
-
-    #[test]
-    fn content_disposition_escapes_quotes_and_backslashes() {
-        assert_eq!(
-            content_disposition("a\"b\\c.txt"),
-            "attachment; filename=\"a\\\"b\\\\c.txt\""
-        );
-    }
-
-    #[test]
-    fn content_disposition_falls_back_for_non_latin1() {
-        assert_eq!(
-            content_disposition("\u{30d5}\u{30a1}\u{30a4}\u{30eb}.txt"),
-            "attachment; filename=\"____.txt\"; filename*=UTF-8''%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB.txt"
-        );
-    }
-
-    #[test]
-    fn content_disposition_keeps_latin1_in_the_quoted_name() {
-        assert_eq!(
-            content_disposition("caf\u{e9}.txt"),
-            "attachment; filename=\"caf\u{e9}.txt\""
-        );
     }
 }

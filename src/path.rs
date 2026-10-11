@@ -16,6 +16,10 @@ use std::collections::HashMap;
 pub struct PathPattern {
     segments: Vec<Segment>,
     case_sensitive: bool,
+    /// Whether the pattern text itself ended with a slash, which
+    /// strict mode compares against the request path's.
+    trailing_slash: bool,
+    strict: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -80,10 +84,12 @@ impl<'a> Cursor<'a> {
 
 impl PathPattern {
     /// Parse a path string into a pattern.
-    pub fn new(path: &str, case_sensitive: bool, _strict: bool) -> Self {
+    pub fn new(path: &str, case_sensitive: bool, strict: bool) -> Self {
         Self {
             segments: parse(path),
             case_sensitive,
+            trailing_slash: path.len() > 1 && path.ends_with('/'),
+            strict,
         }
     }
 
@@ -114,6 +120,12 @@ impl PathPattern {
     }
 
     pub fn match_path(&self, path: &str) -> Option<HashMap<String, String>> {
+        // Strict routing: a pattern's trailing slash must agree with
+        // the request's. Middleware prefixes are exempt — the slash
+        // belongs to the remainder there.
+        if self.strict && self.trailing_slash != (path.len() > 1 && path.ends_with('/')) {
+            return None;
+        }
         let mut cur = Cursor::new(path);
         let mut params = HashMap::new();
 
@@ -435,6 +447,25 @@ fn decode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn strict_mode_demands_the_trailing_slash() {
+        let strict = PathPattern::new("/app", false, true);
+        assert!(strict.match_path("/app").is_some());
+        assert!(strict.match_path("/app/").is_none());
+
+        let slashed = PathPattern::new("/app/", false, true);
+        assert!(slashed.match_path("/app/").is_some());
+        assert!(slashed.match_path("/app").is_none());
+
+        // Prefix matching stays lenient: the slash belongs to the
+        // remainder for middleware and mounts.
+        assert!(strict.match_prefix("/app/").is_some());
+        assert!(strict.match_prefix("/app/x").is_some());
+
+        // Default routing is unaffected.
+        let lenient = PathPattern::new("/app", false, false);
+        assert!(lenient.match_path("/app/").is_some());
+    }
     use super::*;
 
     fn p(path: &str) -> PathPattern {

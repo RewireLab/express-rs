@@ -34,6 +34,9 @@ use std::sync::Arc;
 pub struct App {
     server: Server,
     router: Router,
+    /// Settings turned off with [`App::disable`]. Only
+    /// `"x-powered-by"` is consulted today.
+    disabled: std::collections::HashSet<String>,
 }
 
 impl App {
@@ -42,7 +45,21 @@ impl App {
         Self {
             server: Server::new(),
             router: Router::new(),
+            disabled: std::collections::HashSet::new(),
         }
+    }
+
+    /// Turn a setting off, as `app.disable(name)`.
+    ///
+    /// The only setting consulted today is `"x-powered-by"`, which
+    /// Express sends on every response by default.
+    pub fn disable(&mut self, setting: &str) {
+        self.disabled.insert(setting.to_string());
+    }
+
+    /// Turn a setting back on, as `app.enable(name)`.
+    pub fn enable(&mut self, setting: &str) {
+        self.disabled.remove(setting);
     }
 
     /// Enable case-sensitive routing.
@@ -338,6 +355,8 @@ impl App {
     ///
     /// Runs indefinitely until the process is killed.
     pub async fn listen(mut self, port: u16) -> Result<(), Error> {
+        self.server
+            .set_x_powered_by(!self.disabled.contains("x-powered-by"));
         self.server.set_router(self.router);
         self.server.listen(port).await
     }

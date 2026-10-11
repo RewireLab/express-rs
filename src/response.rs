@@ -239,6 +239,55 @@ impl Response {
         self
     }
 
+    /// Set a signed cookie, as `res.cookie(name, value, { signed: true })`.
+    ///
+    /// The value goes out as `s:<encoded>.<signature>`, HMAC-SHA256
+    /// over the still-encoded value in the cookie-signature format.
+    /// The secret rides in the call rather than on the app, because a
+    /// `Response` cannot see the request the way Express's `res`
+    /// reaches `req.secret`. Verify on the way in with
+    /// [`Request::signed_cookies`](crate::Request::signed_cookies).
+    pub fn cookie_signed(
+        &mut self,
+        name: &str,
+        value: &str,
+        secret: &str,
+        options: &CookieOptions,
+    ) -> &mut Self {
+        let encoded = cookies::encode_component(value);
+        let signed = format!("s:{}.{}", encoded, cookies::sign(&encoded, secret));
+        if let Some(field) = cookies::serialize(name, &signed, options) {
+            if let Ok(v) = HeaderValue::from_str(&field) {
+                self.headers
+                    .append(HeaderName::from_static("set-cookie"), v);
+            }
+        }
+        self
+    }
+
+    /// Mark the response as an attachment, as `res.attachment()`.
+    ///
+    /// With a filename, `Content-Disposition` carries it and the
+    /// `Content-Type` is taken from the extension (octet-stream when
+    /// there is none). A later `send()` supplies the body.
+    pub fn attachment(&mut self, filename: Option<&str>) -> &mut Self {
+        match filename {
+            Some(filename) => {
+                let ext = match filename.rsplit_once('.') {
+                    Some((prefix, ext)) if !prefix.is_empty() => ext,
+                    _ => "",
+                };
+                self.content_type(ext);
+                let disposition = content_disposition(filename);
+                self.set("content-disposition", &disposition);
+            }
+            None => {
+                self.set("content-disposition", "attachment");
+            }
+        }
+        self
+    }
+
     /// Set a cookie on the response.
     ///
     /// The value is percent-encoded the way Express's default
@@ -374,13 +423,21 @@ impl Response {
             }
         }
 
-        if let Some(_ims) = if_modified_since {
-            match self.get("last-modified") {
-                Some(_lm) => {
-                    // Comparing timestamps would need a date parser; the
-                    // ETag branch above already covers the common case.
-                }
-                None => return false,
+        if let Some(ims) = if_modified_since {
+            let fresh = match (
+                self.get("last-modified").as_deref(),
+                httpdate::parse_http_date(ims),
+            ) {
+                (Some(lm), Ok(since)) => match httpdate::parse_http_date(lm) {
+                    // Whole-second precision: sub-second file mtimes
+                    // would otherwise always read as modified.
+                    Ok(modified) => secs(modified) <= secs(since),
+                    Err(_) => false,
+                },
+                _ => false,
+            };
+            if !fresh {
+                return false;
             }
         }
 
@@ -717,6 +774,37 @@ fn escape_html(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// The whole-second part of a timestamp, for fresh comparisons.
+fn secs(t: std::time::SystemTime) -> u64 {
+    t.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Build a `Content-Disposition` value.
+///
+/// A subset of the `content-disposition` package: the name is quoted
+/// with `"` and `\` escaped, and a name carrying characters outside
+/// ISO-8859-1 gains a `filename*` parameter percent-encoded the way
+/// `encodeURIComponent` does, with a `_`-substituted fallback.
+pub(crate) fn content_disposition(filename: &str) -> String {
+    let latin1: String = filename
+        .chars()
+        .map(|c| if (c as u32) <= 0xFF { c } else { '_' })
+        .collect();
+    let quoted = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
+
+    if latin1 == filename {
+        format!("attachment; filename={}", quoted(filename))
+    } else {
+        format!(
+            "attachment; filename={}; filename*=UTF-8''{}",
+            quoted(&latin1),
+            cookies::encode_component(filename)
+        )
+    }
+}
+
 /// True when an `Accept` header admits `wanted`.
 ///
 /// Handles the wildcards and `q` values that matter in practice: an
@@ -817,6 +905,38 @@ mod tests {
     #[test]
     fn zero_quality_excludes() {
         assert!(!accepts_type("text/html;q=0", "text/html"));
+    }
+
+    #[test]
+    fn content_disposition_quotes_ascii_names() {
+        assert_eq!(
+            content_disposition("report.txt"),
+            "attachment; filename=\"report.txt\""
+        );
+    }
+
+    #[test]
+    fn content_disposition_escapes_quotes_and_backslashes() {
+        assert_eq!(
+            content_disposition("a\"b\\c.txt"),
+            "attachment; filename=\"a\\\"b\\\\c.txt\""
+        );
+    }
+
+    #[test]
+    fn content_disposition_falls_back_for_non_latin1() {
+        assert_eq!(
+            content_disposition("\u{30d5}\u{30a1}\u{30a4}\u{30eb}.txt"),
+            "attachment; filename=\"____.txt\"; filename*=UTF-8''%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB.txt"
+        );
+    }
+
+    #[test]
+    fn content_disposition_keeps_latin1_in_the_quoted_name() {
+        assert_eq!(
+            content_disposition("caf\u{e9}.txt"),
+            "attachment; filename=\"caf\u{e9}.txt\""
+        );
     }
 
     #[test]
