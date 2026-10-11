@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use crate::body::ParsedBody;
+use crate::cookies;
 
 /// An HTTP request.
 ///
@@ -22,6 +23,8 @@ pub struct Request {
     headers: HeaderMap,
     body: Bytes,
     query: HashMap<String, String>,
+    /// Cookies parsed from the `Cookie` header(s).
+    cookies: HashMap<String, String>,
     /// Route parameters extracted from the path (e.g., `:id` → `params["id"]`).
     pub params: HashMap<String, String>,
     /// Body parsed by body-parser middleware, if any ran.
@@ -37,12 +40,22 @@ impl Request {
     /// Create a new request from raw parts.
     pub fn new(method: Method, uri: Uri, headers: HeaderMap, body: Bytes) -> Self {
         let query = parse_query(&uri);
+        // Several `Cookie` headers are legal; RFC 6265 §5.4 says to
+        // treat them as one list joined on semicolons.
+        let cookie_header = headers
+            .get_all("cookie")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let cookies = cookies::parse(&cookie_header);
         Self {
             method,
             uri,
             headers,
             body,
             query,
+            cookies,
             params: HashMap::new(),
             parsed: RwLock::new(None),
         }
@@ -102,6 +115,14 @@ impl Request {
     /// Get a query parameter by name.
     pub fn query_param(&self, name: &str) -> Option<&str> {
         self.query.get(name).map(|s| s.as_str())
+    }
+
+    /// The cookies sent with the request, percent-decoded.
+    ///
+    /// Express fills `req.cookies` through the `cookie-parser`
+    /// middleware; here the parsing is built in and always available.
+    pub fn cookies(&self) -> &HashMap<String, String> {
+        &self.cookies
     }
 
     /// Get a route parameter by name.

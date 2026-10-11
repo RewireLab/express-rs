@@ -10,7 +10,7 @@ The point of express-rs is to *rewire* an existing idea and learn from the proce
 
 ## Status
 
-**Phase 8: Static files** — complete.
+**Phase 9: Cookies** — complete.
 
 The framework currently provides:
 
@@ -38,6 +38,7 @@ The framework currently provides:
 - **Default error response:** 500 with the message, `Content-Security-Policy`, and `nosniff`, mirroring `finalhandler`
 - **Body parsing:** `body::json()`, `body::text()`, `body::urlencoded()` with content-type gating, `gzip`/`deflate`/`br` decompression, charset checks, size limits, and typed errors
 - **Static files:** `static_files::serve_static()` and `serve_static_at()` with content types, `ETag`/`Last-Modified` caching, conditional requests, single ranges, index files, and trailing-slash redirects
+- **Cookies:** `res.cookie()` and `res.clear_cookie()` with attribute options, and built-in `req.cookies()` parsing
 
 ## Quick Start
 
@@ -82,6 +83,7 @@ src/
   request.rs   — Request wrapper (method, path, headers, body, query)
   response.rs  — Response wrapper (status, headers, body)
   body.rs      — Body parsing middleware (JSON, text, forms)
+  cookies.rs   — Cookie parsing and `Set-Cookie` serialisation
   static_files.rs — Static file middleware (serve-static equivalent)
   mime.rs      — Content type resolution and charset handling
   etag.rs      — Entity tag generation and comparison
@@ -131,6 +133,9 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | **Canonical confinement for static files** | `send` checks `..` lexically and follows symlinks wherever they lead. Paths here are canonicalized and must stay under the root, so a symlink escape answers 404. |
 | **Stat-based weak ETags for files** | `send` tags the stat result instead of hashing content, so large files never pay for a digest. Same shape here: `W/"<hexlen>-<hexmtime>"`. |
 | **`max_age_secs` in seconds** | Express accepts milliseconds or strings like `"1d"`. Seconds as `u64` need no string parser and no float clamping. |
+| **Cookies parsed eagerly on the request** | Express fills `req.cookies` through the `cookie-parser` middleware. The parse is cheap, so it happens in `Request::new` beside the query string and is always available. |
+| **`Set-Cookie` bypasses `append()`** | `res.append()` comma-joins values, which would merge distinct cookies into one broken header. `res.cookie()` appends real header instances instead. |
+| **No throw for invalid cookie options** | Express throws `TypeError` for a control-character name or `partitioned` without `secure`. A handler here has no error channel, so both cases are dropped silently. |
 
 ### Dependencies
 
@@ -192,9 +197,11 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 | `req.fresh()` | ✅ | ETag branch; date comparison not implemented |
 | Strict routing | ⚠️ | flag accepted, not enforced |
 | `next('router')` | ❌ | not implemented |
-| Error middleware | ❌ | not implemented |
 | `app.param()` callbacks | ❌ | not implemented |
-| `res.cookie()` | ❌ | not implemented |
+| `res.cookie()` | ✅ | `CookieOptions` carries the attributes |
+| `res.clearCookie()` | ✅ | `clear_cookie()`; forces epoch expiry |
+| Cookie parsing (`req.cookies`) | ✅ | built in; Express needs the `cookie-parser` middleware |
+| Signed cookies | ❌ | the `s:` HMAC prefix needs a per-app secret |
 | `res.format()` | ❌ | not implemented |
 | `res.sendFile()` | ❌ | not implemented |
 | Body parsing (JSON, text, form) | ✅ | `body::json()`, `body::text()`, `body::urlencoded()` |
@@ -245,6 +252,17 @@ TCP connection → hyper HTTP/1.1 parser → Incoming request
 - `max_age_secs` takes seconds; Express takes milliseconds or duration strings.
 - Extension fallback (`extensions` option) is implemented. Directory listing was never part of `serve-static` and is not implemented either.
 
+### Known differences in cookies
+
+- Signed cookies (`s:`-prefixed HMAC values via cookie-parser) are not implemented; there is no per-app secret to sign with.
+- The `encode`/`decode` options do not exist. Values always go out `encodeURIComponent`-encoded and come in percent-decoded; an escape that does not decode is kept raw rather than failing the request the way `cookie-parser` surfaces a 500.
+- `max_age_secs` takes seconds and also derives `Expires` from the current time, matching what Express does with `maxAge`.
+- `partitioned` without `secure` is dropped silently; Express throws `TypeError`.
+- A name carrying a control character is refused (no header is set); Express throws `TypeError`. Other names the `cookie` package accepts — including oddities like `a=b` — pass through.
+- `priority: Medium` is omitted from the header because it is the browser default, the same rule Express applies.
+- `clear_cookie` drops a caller-supplied `max_age`. Express's `clearCookie` would let it overwrite the epoch expiry and keep the cookie alive.
+- When a request carries the same cookie name twice, the first occurrence wins.
+
 ## Testing
 
 ```bash
@@ -253,8 +271,8 @@ cargo test
 
 Integration tests start a real server on a random port and make actual HTTP requests over TCP.
 
-- 89 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, and static helpers
-- 131 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing, and static files
+- 108 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, and cookies
+- 140 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing, static files, and cookies
 
 ```bash
 cargo fmt --check   # formatting
