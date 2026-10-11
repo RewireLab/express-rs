@@ -4546,3 +4546,198 @@ async fn test_download_sets_content_disposition() {
         response
     );
 }
+
+// ============================================================
+// Phase 11: Content Negotiation Tests (res.format)
+// ============================================================
+
+#[tokio::test]
+async fn test_format_picks_the_best_type_by_quality() {
+    let port = start_server(|app| {
+        app.get("/negotiate", |req, res, _next, _params| async move {
+            let res = express_rs::response::format(&req, res, |f| {
+                f.on("json", |mut res| {
+                    res.send(r#"{"picked":"json"}"#);
+                    Ok(res)
+                })
+                .on("html", |mut res| {
+                    res.send("<p>html</p>");
+                    Ok(res)
+                })
+            })?;
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "GET",
+        "/negotiate",
+        &[("Accept", "text/html;q=0.5, application/json")],
+        None,
+    )
+    .await;
+    assert!(response.contains("200 OK"), "got: {}", response);
+    assert!(
+        response.contains("content-type: application/json"),
+        "got: {}",
+        response
+    );
+    assert!(
+        response.contains("vary: Accept"),
+        "Expected Vary: Accept, got: {}",
+        response
+    );
+    assert!(
+        response.contains("picked"),
+        "Expected the json body, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("html</p>"),
+        "Only the chosen handler must run, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_format_expands_extension_keys() {
+    let port = start_server(|app| {
+        app.get("/negotiate", |req, res, _next, _params| async move {
+            let res = express_rs::response::format(&req, res, |f| {
+                f.on("json", |mut res| {
+                    res.send("json body");
+                    Ok(res)
+                })
+            })?;
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(
+        port,
+        "GET",
+        "/negotiate",
+        &[("Accept", "application/json")],
+        None,
+    )
+    .await;
+    assert!(
+        response.contains("content-type: application/json"),
+        "Expected the extension expanded, got: {}",
+        response
+    );
+    assert!(response.contains("json body"), "got: {}", response);
+}
+
+#[tokio::test]
+async fn test_format_accepts_full_type_keys() {
+    let port = start_server(|app| {
+        app.get("/negotiate", |req, res, _next, _params| async move {
+            let res = express_rs::response::format(&req, res, |f| {
+                f.on("text/html", |mut res| {
+                    res.send("<p>html</p>");
+                    Ok(res)
+                })
+            })?;
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(port, "GET", "/negotiate", &[("Accept", "text/html")], None).await;
+    assert!(
+        response.contains("content-type: text/html"),
+        "got: {}",
+        response
+    );
+    assert!(response.contains("<p>html</p>"), "got: {}", response);
+}
+
+#[tokio::test]
+async fn test_format_default_runs_when_nothing_matches() {
+    let port = start_server(|app| {
+        app.get("/negotiate", |req, res, _next, _params| async move {
+            let res = express_rs::response::format(&req, res, |f| {
+                f.on("json", |mut res| {
+                    res.send("json body");
+                    Ok(res)
+                })
+                .default(|mut res| {
+                    res.send("plain fallback");
+                    Ok(res)
+                })
+            })?;
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(port, "GET", "/negotiate", &[("Accept", "text/csv")], None).await;
+    assert!(response.contains("200 OK"), "got: {}", response);
+    assert!(
+        response.contains("plain fallback"),
+        "Expected the default body, got: {}",
+        response
+    );
+    assert!(
+        response.contains("vary: Accept"),
+        "Vary must be set even on the default, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_format_406_without_default() {
+    let port = start_server(|app| {
+        app.get("/negotiate", |req, res, _next, _params| async move {
+            let res = express_rs::response::format(&req, res, |f| {
+                f.on("json", |mut res| {
+                    res.send("json body");
+                    Ok(res)
+                })
+            })?;
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request_raw(port, "GET", "/negotiate", &[("Accept", "text/csv")], None).await;
+    assert!(
+        response.contains("406 Not Acceptable"),
+        "Expected 406, got: {}",
+        response
+    );
+    // Vary is lost here: the 406 travels as Err, and a returned Err
+    // discards the headers the response carried — the documented
+    // behaviour of error propagation in this framework.
+}
+
+#[tokio::test]
+async fn test_format_without_accept_header_picks_first_offered() {
+    let port = start_server(|app| {
+        app.get("/negotiate", |req, res, _next, _params| async move {
+            let res = express_rs::response::format(&req, res, |f| {
+                f.on("json", |mut res| {
+                    res.send("json body");
+                    Ok(res)
+                })
+                .on("html", |mut res| {
+                    res.send("<p>html</p>");
+                    Ok(res)
+                })
+            })?;
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/negotiate", None).await;
+    assert!(
+        response.contains("json body"),
+        "First offered wins without Accept, got: {}",
+        response
+    );
+}
