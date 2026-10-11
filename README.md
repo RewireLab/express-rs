@@ -329,7 +329,16 @@ cargo test          # tests
 
 ## Benchmarks
 
-Not yet run. The plan is to measure hello-world, JSON, parameterized, and middleware-chain endpoints against Express, Fastify, Axum, and Actix Web using `oha` or `wrk`, and publish the methodology alongside the numbers.
+Measured with `bench/run.sh`: the express-rs server (`examples/bench_server.rs`) and an Express 5 app (`bench/express_app.js`) with identical endpoints run back-to-back on the same machine, each driven by `autocannon` with 8 connections after a 2-second warmup, 10 seconds measured per endpoint. express-rs in release mode; Node v26.8.1 for Express. Absolute numbers are machine-specific — the comparison is the point. With 8 connections the load client is likely the ceiling on the fastest stack, so read express-rs's numbers as a floor.
+
+| Endpoint | express-rs (req/sec) | Express 5 (req/sec) | Ratio | p99 express-rs | p99 Express 5 |
+|---|---|---|---|---|---|
+| `GET /hello` | 50,716 | 19,310 | 2.6× | 0.0 ms | 1.0 ms |
+| `GET /json` | 54,176 | 19,338 | 2.8× | 0.0 ms | 0.0 ms |
+| `GET /user/42` | 51,766 | 18,460 | 2.8× | 0.0 ms | 1.0 ms |
+| `GET /chain` (5 middleware) | 54,419 | 19,049 | 2.9× | 0.0 ms | 1.0 ms |
+
+Zero errors and zero non-2xx responses in every run. The five-deep middleware chain costs express-rs nothing measurable over hello-world at this load; Express shows the same flatness, its bottleneck lying elsewhere. Re-run with `./bench/run.sh` after any change to the dispatch path — the harness rebuilds, starts both servers, warms up, and prints the table.
 
 ## License
 
