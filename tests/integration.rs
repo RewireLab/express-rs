@@ -4749,7 +4749,9 @@ async fn test_format_without_accept_header_picks_first_offered() {
 #[tokio::test]
 async fn test_raw_parser_stores_bytes() {
     let port = start_server(|app| {
-        app.r#use(express_rs::body::raw(express_rs::body::RawOptions::default()));
+        app.r#use(express_rs::body::raw(
+            express_rs::body::RawOptions::default(),
+        ));
         app.post("/echo", |req, mut res, _next, _params| async move {
             match req.parsed_body() {
                 Some(express_rs::body::ParsedBody::Raw(bytes)) => {
@@ -4779,7 +4781,9 @@ async fn test_raw_parser_stores_bytes() {
 #[tokio::test]
 async fn test_raw_parser_skips_other_types() {
     let port = start_server(|app| {
-        app.r#use(express_rs::body::raw(express_rs::body::RawOptions::default()));
+        app.r#use(express_rs::body::raw(
+            express_rs::body::RawOptions::default(),
+        ));
         app.post("/echo", |req, mut res, _next, _params| async move {
             match req.parsed_body() {
                 Some(_) => {
@@ -4803,7 +4807,11 @@ async fn test_raw_parser_skips_other_types() {
     )
     .await;
     let body = response.split("\r\n\r\n").nth(1).unwrap_or("").trim_end();
-    assert_eq!(body, "none", "text/plain must not parse as raw, got: {}", response);
+    assert_eq!(
+        body, "none",
+        "text/plain must not parse as raw, got: {}",
+        response
+    );
 }
 
 #[tokio::test]
@@ -4826,6 +4834,85 @@ async fn test_raw_parser_enforces_limit() {
         "/echo",
         &[("Content-Type", "application/octet-stream")],
         Some(b"0123456789ab"),
+    )
+    .await;
+    assert!(
+        response.contains("413"),
+        "Expected 413 over the limit, got: {}",
+        response
+    );
+}
+
+// ============================================================
+// Phase 13: zstd Content-Encoding Tests
+// ============================================================
+
+fn zstd_compress(data: &[u8]) -> Vec<u8> {
+    zstd::stream::encode_all(data, 3).unwrap()
+}
+
+#[tokio::test]
+async fn test_json_zstd_body_is_decompressed() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(Default::default()));
+        app.post("/", |req, mut res, _next, _params| async move {
+            match req.parsed_body() {
+                Some(express_rs::body::ParsedBody::Json(v)) => {
+                    res.send(&format!("a={}", v["a"]));
+                    Ok(res)
+                }
+                _ => {
+                    res.send("none");
+                    Ok(res)
+                }
+            }
+        });
+    })
+    .await;
+
+    let compressed = zstd_compress(br#"{"a":1}"#);
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[
+            ("Content-Type", "application/json"),
+            ("Content-Encoding", "zstd"),
+        ],
+        Some(&compressed),
+    )
+    .await;
+    assert!(
+        response.contains("a=1"),
+        "Expected decompressed JSON, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_zstd_body_over_the_limit_is_413() {
+    let port = start_server(|app| {
+        app.r#use(express_rs::body::json(express_rs::body::JsonOptions {
+            limit: 5,
+            ..Default::default()
+        }));
+        app.post("/", |_req, mut res, _next, _params| async move {
+            res.send("ok");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let compressed = zstd_compress(br#"{"a":"0123456789"}"#);
+    let response = request_raw(
+        port,
+        "POST",
+        "/",
+        &[
+            ("Content-Type", "application/json"),
+            ("Content-Encoding", "zstd"),
+        ],
+        Some(&compressed),
     )
     .await;
     assert!(
