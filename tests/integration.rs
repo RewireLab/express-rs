@@ -5057,3 +5057,119 @@ async fn test_param_callback_short_circuits_without_next() {
     let passed = request(port, "GET", "/items/open", None).await;
     assert!(passed.contains("route reached"), "got: {}", passed);
 }
+
+// ============================================================
+// Phase 15: Route-Scoped Error Handler Tests
+// ============================================================
+
+#[tokio::test]
+async fn test_route_error_handler_catches_its_own_route() {
+    let port = start_server(|app| {
+        app.get_with_error(
+            "/users/:id",
+            |_req, _res, _next, _params| async move {
+                Err(express_rs::Error::with_status(400, "bad id"))
+            },
+            |err, _req, mut res, _next, _params| async move {
+                res.status(err.status())
+                    .send(&format!("route: {}", err.message()));
+                Ok(res)
+            },
+        );
+        app.get("/ok", |_req, mut res, _next, _params| async move {
+            res.send("fine");
+            Ok(res)
+        });
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.status(err.status())
+                .send(&format!("GLOBAL: {}", err.message()));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/users/1", None).await;
+    assert!(response.contains("400 Bad Request"), "got: {}", response);
+    assert!(
+        response.contains("route: bad id"),
+        "Expected the route-scoped handler, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("GLOBAL"),
+        "The global handler must not run, got: {}",
+        response
+    );
+
+    let ok = request(port, "GET", "/ok", None).await;
+    assert!(ok.contains("fine"), "got: {}", ok);
+}
+
+#[tokio::test]
+async fn test_external_errors_skip_route_error_handlers() {
+    let port = start_server(|app| {
+        app.r#use(|_req, _res, _next, _params| async move {
+            Err(express_rs::Error::with_status(418, "from middleware"))
+        });
+        app.get_with_error(
+            "/users/:id",
+            |_req, mut res, _next, _params| async move {
+                res.send("route reached");
+                Ok(res)
+            },
+            |err, _req, mut res, _next, _params| async move {
+                res.status(err.status()).send("route handler ran");
+                Ok(res)
+            },
+        );
+        app.use_error_handler(|err, _req, mut res, _next, _params| async move {
+            res.status(err.status())
+                .send(&format!("GLOBAL: {}", err.message()));
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/users/1", None).await;
+    assert!(response.contains("418"), "got: {}", response);
+    assert!(
+        response.contains("GLOBAL: from middleware"),
+        "Expected the global handler, got: {}",
+        response
+    );
+    assert!(
+        !response.contains("route handler ran"),
+        "The route-scoped handler must not catch foreign errors, got: {}",
+        response
+    );
+}
+
+#[tokio::test]
+async fn test_route_error_handler_can_continue() {
+    let port = start_server(|app| {
+        app.get_with_error(
+            "/x",
+            |_req, _res, _next, _params| async move {
+                Err(express_rs::Error::with_status(500, "boom"))
+            },
+            |_err, _req, mut res, next, _params| async move {
+                res.set("x-recovered", "yes");
+                next(express_rs::router::NextCall::Continue).await;
+                Ok(res)
+            },
+        );
+        app.use_with_path("/x", |_req, mut res, _next, _params| async move {
+            res.send("after recovery");
+            Ok(res)
+        });
+    })
+    .await;
+
+    let response = request(port, "GET", "/x", None).await;
+    assert!(response.contains("x-recovered: yes"), "got: {}", response);
+    assert!(
+        response.contains("after recovery"),
+        "Expected dispatch to continue, got: {}",
+        response
+    );
+}

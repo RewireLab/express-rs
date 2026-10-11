@@ -91,6 +91,11 @@ struct Layer {
     method: Option<Method>,
     handler: HandlerFn,
     is_route: bool,
+    /// A route-scoped error handler, as the second function in
+    /// Express's `app.get(path, fn, errFn)`. It catches failures of
+    /// this layer's own handler; errors raised elsewhere still skip
+    /// the layer entirely.
+    route_error: Option<ErrorHandler>,
 }
 
 /// Router state shared across the dispatch loop.
@@ -227,6 +232,102 @@ impl Router {
         self.add_route(path, Some(Method::HEAD), handler);
     }
 
+    /// Register a handler for GET requests with a route-scoped
+    /// error handler, as `app.get(path, fn, errFn)`.
+    pub fn get_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.add_route_error(path, Some(Method::GET), handler, error_handler);
+    }
+
+    /// Register a handler for POST requests with a route-scoped
+    /// error handler, as `app.post(path, fn, errFn)`.
+    pub fn post_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.add_route_error(path, Some(Method::POST), handler, error_handler);
+    }
+
+    /// Register a handler for PUT requests with a route-scoped
+    /// error handler, as `app.put(path, fn, errFn)`.
+    pub fn put_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.add_route_error(path, Some(Method::PUT), handler, error_handler);
+    }
+
+    /// Register a handler for PATCH requests with a route-scoped
+    /// error handler, as `app.patch(path, fn, errFn)`.
+    pub fn patch_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.add_route_error(path, Some(Method::PATCH), handler, error_handler);
+    }
+
+    /// Register a handler for DELETE requests with a route-scoped
+    /// error handler, as `app.delete(path, fn, errFn)`.
+    pub fn delete_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.add_route_error(path, Some(Method::DELETE), handler, error_handler);
+    }
+
+    /// Register a handler for OPTIONS requests with a route-scoped
+    /// error handler, as `app.options(path, fn, errFn)`.
+    pub fn options_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.add_route_error(path, Some(Method::OPTIONS), handler, error_handler);
+    }
+
+    /// Register a handler for HEAD requests with a route-scoped
+    /// error handler, as `app.head(path, fn, errFn)`.
+    pub fn head_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.add_route_error(path, Some(Method::HEAD), handler, error_handler);
+    }
+
+    /// Register a handler for all HTTP methods with a route-scoped
+    /// error handler, as `app.all(path, fn, errFn)`.
+    pub fn all_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.add_route_error(path, None, handler, error_handler);
+    }
+
     /// Register a handler for all HTTP methods.
     pub fn all<F, Fut>(&mut self, path: &str, handler: F)
     where
@@ -277,12 +378,50 @@ impl Router {
         F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Response, Error>> + Send + 'static,
     {
+        self.add_route_full(
+            path,
+            method,
+            handler,
+            |err, _req, _res, _next, _params| async move { Err::<Response, Error>(err) },
+        );
+    }
+
+    /// Add a route layer with a route-scoped error handler, as
+    /// `app.get(path, fn, errFn)`.
+    pub fn add_route_error<F, Fut, E, EFut>(
+        &mut self,
+        path: &str,
+        method: Option<Method>,
+        handler: F,
+        error_handler: E,
+    ) where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.add_route_full(path, method, handler, error_handler);
+    }
+
+    fn add_route_full<F, Fut, E, EFut>(
+        &mut self,
+        path: &str,
+        method: Option<Method>,
+        handler: F,
+        error_handler: E,
+    ) where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
         let pattern = PathPattern::new(path, self.case_sensitive, self.strict);
         self.stack.push(Layer {
             pattern,
             method,
             handler: HandlerFn::Request(boxed_request(handler)),
             is_route: true,
+            route_error: Some(boxed_error(error_handler)),
         });
     }
 
@@ -294,6 +433,7 @@ impl Router {
             method: None,
             handler,
             is_route: false,
+            route_error: None,
         });
     }
 
@@ -444,7 +584,7 @@ impl Router {
                         Box::pin(async move { apply_next_call(&state, call) })
                     });
 
-                    handler(req_clone, res, next, params).await
+                    handler(req_clone, res, next, params.clone()).await
                 }
                 HandlerFn::Error(handler) => {
                     // Take the error so the handler owns it; a subsequent
@@ -465,7 +605,7 @@ impl Router {
                         Box::pin(async move { apply_next_call(&state, call) })
                     });
 
-                    handler(err, req_clone, res, next, params).await
+                    handler(err, req_clone, res, next, params.clone()).await
                 }
             };
 
@@ -477,11 +617,47 @@ impl Router {
                     // partial response and an error.
                     res = Response::new();
 
-                    // A failure advances dispatch, exactly as Express's
-                    // `ret.then(null, error => next(error))` does.
-                    let mut s = state.lock().unwrap();
-                    s.error = Some(e);
-                    s.next_called = true;
+                    // A route-scoped error handler catches its own
+                    // route's failure, as the second function of
+                    // `app.get(path, fn, errFn)` does. An error raised
+                    // elsewhere still skips this layer entirely, which
+                    // is the router's own skip rule.
+                    let caught = match (&layer.handler, &layer.route_error) {
+                        (HandlerFn::Request(_), Some(route_error)) if layer.is_route => {
+                            state.lock().unwrap().next_called = false;
+                            let state_clone = state.clone();
+                            let next: Next = Arc::new(move |call| {
+                                let state = state_clone.clone();
+                                Box::pin(async move { apply_next_call(&state, call) })
+                            });
+                            match route_error(e.clone(), req.clone(), res, next, params.clone())
+                                .await
+                            {
+                                Ok(next_res) => {
+                                    res = next_res;
+                                    true
+                                }
+                                Err(e2) => {
+                                    // The error handler itself failed:
+                                    // rebuild and forward the new error.
+                                    res = Response::new();
+                                    let mut s = state.lock().unwrap();
+                                    s.error = Some(e2);
+                                    s.next_called = true;
+                                    true
+                                }
+                            }
+                        }
+                        _ => false,
+                    };
+
+                    if !caught {
+                        // A failure advances dispatch, exactly as Express's
+                        // `ret.then(null, error => next(error))` does.
+                        let mut s = state.lock().unwrap();
+                        s.error = Some(e);
+                        s.next_called = true;
+                    }
                 }
             }
         }

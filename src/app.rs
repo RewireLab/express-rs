@@ -118,6 +118,130 @@ impl App {
         self.router.head(path, handler);
     }
 
+    /// Register a handler for GET requests with a route-scoped
+    /// error handler, as `app.get(path, fn, errFn)`.
+    ///
+    /// The error handler runs only when this route's own handler
+    /// fails; an error raised elsewhere still skips the whole layer,
+    /// reaching ordinary error middleware instead.
+    pub fn get_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.router.get_with_error(path, handler, error_handler);
+    }
+
+    /// Register a handler for POST requests with a route-scoped
+    /// error handler, as `app.post(path, fn, errFn)`.
+    ///
+    /// The error handler runs only when this route's own handler
+    /// fails; an error raised elsewhere still skips the whole layer,
+    /// reaching ordinary error middleware instead.
+    pub fn post_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.router.post_with_error(path, handler, error_handler);
+    }
+
+    /// Register a handler for PUT requests with a route-scoped
+    /// error handler, as `app.put(path, fn, errFn)`.
+    ///
+    /// The error handler runs only when this route's own handler
+    /// fails; an error raised elsewhere still skips the whole layer,
+    /// reaching ordinary error middleware instead.
+    pub fn put_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.router.put_with_error(path, handler, error_handler);
+    }
+
+    /// Register a handler for PATCH requests with a route-scoped
+    /// error handler, as `app.patch(path, fn, errFn)`.
+    ///
+    /// The error handler runs only when this route's own handler
+    /// fails; an error raised elsewhere still skips the whole layer,
+    /// reaching ordinary error middleware instead.
+    pub fn patch_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.router.patch_with_error(path, handler, error_handler);
+    }
+
+    /// Register a handler for DELETE requests with a route-scoped
+    /// error handler, as `app.delete(path, fn, errFn)`.
+    ///
+    /// The error handler runs only when this route's own handler
+    /// fails; an error raised elsewhere still skips the whole layer,
+    /// reaching ordinary error middleware instead.
+    pub fn delete_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.router.delete_with_error(path, handler, error_handler);
+    }
+
+    /// Register a handler for OPTIONS requests with a route-scoped
+    /// error handler, as `app.options(path, fn, errFn)`.
+    ///
+    /// The error handler runs only when this route's own handler
+    /// fails; an error raised elsewhere still skips the whole layer,
+    /// reaching ordinary error middleware instead.
+    pub fn options_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.router.options_with_error(path, handler, error_handler);
+    }
+
+    /// Register a handler for HEAD requests with a route-scoped
+    /// error handler, as `app.head(path, fn, errFn)`.
+    ///
+    /// The error handler runs only when this route's own handler
+    /// fails; an error raised elsewhere still skips the whole layer,
+    /// reaching ordinary error middleware instead.
+    pub fn head_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.router.head_with_error(path, handler, error_handler);
+    }
+
+    /// Register a handler for all HTTP methods with a route-scoped
+    /// error handler, as `app.all(path, fn, errFn)`.
+    pub fn all_with_error<F, Fut, E, EFut>(&mut self, path: &str, handler: F, error_handler: E)
+    where
+        F: Fn(Arc<Request>, Response, Next, Params) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response, Error>> + Send + 'static,
+        E: Fn(Error, Arc<Request>, Response, Next, Params) -> EFut + Send + Sync + 'static,
+        EFut: Future<Output = Result<Response, Error>> + Send + 'static,
+    {
+        self.router.all_with_error(path, handler, error_handler);
+    }
+
     /// Register a handler for all HTTP methods.
     pub fn all<F, Fut>(&mut self, path: &str, handler: F)
     where
