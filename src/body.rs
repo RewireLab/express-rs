@@ -8,8 +8,8 @@
 //! request carries no body, it calls `next()` and leaves the request
 //! untouched.
 //!
-//! `zstd` content encoding is not supported; Express gates it on the
-//! Node version.
+//! `Content-Encoding` decompression covers `gzip`, `deflate`, `br`, and
+//! `zstd`; Express gates `zstd` on the Node version.
 
 use std::future::Future;
 use std::io::Read;
@@ -65,7 +65,7 @@ pub struct JsonOptions {
     pub limit: usize,
     /// Only objects and arrays are accepted. Defaults to true.
     pub strict: bool,
-    /// Decompress `gzip`, `deflate`, and `br` bodies. Defaults to true.
+    /// Decompress `gzip`, `deflate`, `br`, and `zstd` bodies. Defaults to true.
     pub inflate: bool,
     /// Content types to parse. Defaults to `application/json`.
     pub types: Vec<String>,
@@ -90,7 +90,7 @@ impl Default for JsonOptions {
 pub struct TextOptions {
     /// Maximum body size in bytes. Defaults to 100kb.
     pub limit: usize,
-    /// Decompress `gzip`, `deflate`, and `br` bodies. Defaults to true.
+    /// Decompress `gzip`, `deflate`, `br`, and `zstd` bodies. Defaults to true.
     pub inflate: bool,
     /// Content types to parse. Defaults to `text/plain`.
     pub types: Vec<String>,
@@ -117,7 +117,7 @@ impl Default for TextOptions {
 pub struct FormOptions {
     /// Maximum body size in bytes. Defaults to 100kb.
     pub limit: usize,
-    /// Decompress `gzip`, `deflate`, and `br` bodies. Defaults to true.
+    /// Decompress `gzip`, `deflate`, `br`, and `zstd` bodies. Defaults to true.
     pub inflate: bool,
     /// Content types to parse. Defaults to the form type.
     pub types: Vec<String>,
@@ -153,7 +153,7 @@ impl Default for FormOptions {
 pub struct RawOptions {
     /// Maximum body size in bytes. Defaults to 100kb.
     pub limit: usize,
-    /// Decompress `gzip`, `deflate`, and `br` bodies. Defaults to true.
+    /// Decompress `gzip`, `deflate`, `br`, and `zstd` bodies. Defaults to true.
     pub inflate: bool,
     /// Content types to parse. Defaults to `application/octet-stream`.
     pub types: Vec<String>,
@@ -375,7 +375,7 @@ fn prepare(
         .to_ascii_lowercase();
     let bytes: Vec<u8> = match encoding.as_str() {
         "identity" => req.body().to_vec(),
-        "gzip" | "deflate" | "br" => {
+        "gzip" | "deflate" | "br" | "zstd" => {
             if !inflate {
                 return Err(Error::with_kind(
                     415,
@@ -449,6 +449,10 @@ fn decompress(encoding: &str, input: &[u8], limit: usize) -> Result<Vec<u8>, Err
         "gzip" => Box::new(flate2::read::MultiGzDecoder::new(input)),
         "deflate" => Box::new(flate2::read::ZlibDecoder::new(input)),
         "br" => Box::new(brotli::Decompressor::new(input, 4096)),
+        "zstd" => Box::new(
+            zstd::stream::read::Decoder::new(input)
+                .map_err(|_| Error::with_kind(400, "entity.parse.failed", "failed to decompress body"))?,
+        ),
         _ => {
             return Err(Error::with_kind(
                 415,
@@ -1046,6 +1050,19 @@ mod tests {
 
         let out = decompress("gzip", &compressed, 100).unwrap();
         assert_eq!(out, b"{\"a\":1}");
+    }
+
+    #[test]
+    fn decompress_round_trips_zstd() {
+        let compressed = zstd::stream::encode_all(&b"0123456789"[..], 3).unwrap();
+        assert_eq!(decompress("zstd", &compressed, 100).unwrap(), b"0123456789");
+    }
+
+    #[test]
+    fn decompress_caps_zstd_at_the_limit() {
+        let compressed = zstd::stream::encode_all(&b"0123456789"[..], 3).unwrap();
+        let err = decompress("zstd", &compressed, 5).unwrap_err();
+        assert_eq!(err.status(), 413);
     }
 
     #[test]
