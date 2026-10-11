@@ -15,6 +15,10 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct PathPattern {
     segments: Vec<Segment>,
+    /// Optional groups expanded as required, computed once at registration.
+    required_segments: Vec<Segment>,
+    static_only: bool,
+    has_optional: bool,
     case_sensitive: bool,
     /// Whether the pattern text itself ended with a slash, which
     /// strict mode compares against the request path's.
@@ -85,8 +89,17 @@ impl<'a> Cursor<'a> {
 impl PathPattern {
     /// Parse a path string into a pattern.
     pub fn new(path: &str, case_sensitive: bool, strict: bool) -> Self {
+        let segments = parse(path);
+        let has_optional = segments.iter().any(contains_optional);
+        let static_only = segments
+            .iter()
+            .all(|segment| matches!(segment, Segment::Static(_)));
+        let required_segments = mandatory(&segments);
         Self {
-            segments: parse(path),
+            segments,
+            required_segments,
+            static_only,
+            has_optional,
             case_sensitive,
             trailing_slash: path.len() > 1 && path.ends_with('/'),
             strict,
@@ -126,11 +139,18 @@ impl PathPattern {
         if self.strict && self.trailing_slash != (path.len() > 1 && path.ends_with('/')) {
             return None;
         }
+        if self.static_only {
+            return self.match_static(path, true);
+        }
+
         let mut cur = Cursor::new(path);
         let mut params = HashMap::new();
 
-        if self.match_from(&mandatory(&self.segments), 0, &mut cur, &mut params) && cur.at_end() {
+        if self.match_from(&self.required_segments, 0, &mut cur, &mut params) && cur.at_end() {
             return Some(params);
+        }
+        if !self.has_optional {
+            return None;
         }
 
         let mut cur = Cursor::new(path);
@@ -168,13 +188,35 @@ impl PathPattern {
     /// Match as a prefix, returning the bound parameters and the
     /// number of path segments consumed.
     fn prefix_match(&self, path: &str) -> Option<(HashMap<String, String>, usize)> {
+        if self.static_only {
+            let mut request_segments = path.split('/').filter(|segment| !segment.is_empty());
+            for expected in &self.segments {
+                let Some(actual) = request_segments.next() else {
+                    return None;
+                };
+                let Segment::Static(expected) = expected else {
+                    unreachable!("static-only pattern contains a dynamic segment");
+                };
+                let matches = if self.case_sensitive {
+                    actual == expected
+                } else {
+                    actual.eq_ignore_ascii_case(expected)
+                };
+                if !matches {
+                    return None;
+                }
+            }
+            return Some((HashMap::new(), self.segments.len()));
+        }
+
         let mut cur = Cursor::new(path);
         let mut params = HashMap::new();
 
-        if self.match_from(&mandatory(&self.segments), 0, &mut cur, &mut params)
-            && cur.at_boundary()
-        {
+        if self.match_from(&self.required_segments, 0, &mut cur, &mut params) && cur.at_boundary() {
             return Some((params, cur.i));
+        }
+        if !self.has_optional {
+            return None;
         }
 
         let mut cur = Cursor::new(path);
@@ -184,6 +226,30 @@ impl PathPattern {
         }
 
         None
+    }
+
+    fn match_static(&self, path: &str, exact: bool) -> Option<HashMap<String, String>> {
+        let mut request_segments = path.split('/').filter(|segment| !segment.is_empty());
+        for expected in &self.segments {
+            let Some(actual) = request_segments.next() else {
+                return None;
+            };
+            let Segment::Static(expected) = expected else {
+                unreachable!("static-only pattern contains a dynamic segment");
+            };
+            let matches = if self.case_sensitive {
+                actual == expected
+            } else {
+                actual.eq_ignore_ascii_case(expected)
+            };
+            if !matches {
+                return None;
+            }
+        }
+        if exact && request_segments.next().is_some() {
+            return None;
+        }
+        Some(HashMap::new())
     }
 
     /// Match `atoms[idx..]` against the cursor, backtracking where a
@@ -338,6 +404,13 @@ fn mandatory(atoms: &[Segment]) -> Vec<Segment> {
         }
     }
     out
+}
+
+fn contains_optional(segment: &Segment) -> bool {
+    match segment {
+        Segment::Optional(_) => true,
+        _ => false,
+    }
 }
 
 /// Parse a path string into a flat list of segments.

@@ -1,56 +1,32 @@
 # express-rs
 
-**Express.js-style HTTP, rebuilt in Rust.**
+**An Express.js-inspired HTTP framework written in Rust.**
 
-An independent Rust implementation inspired by Express.js. This is not an official Express.js project.
+`express-rs` brings familiar Express 5 routing and middleware patterns to an asynchronous Rust server built on Tokio and Hyper. It is an independent project, not an official Express.js implementation, and aims for practical compatibility rather than a complete port.
 
-## Why this exists
+## Features
 
-The point of express-rs is to *rewire* an existing idea and learn from the process: study how Express works, rebuild the important pieces in Rust, measure the result, and document what changed and what did not survive the translation. It is a study in framework internals, not an attempt to displace Express.
+- HTTP/1.1 server with asynchronous handlers and keep-alive connections
+- Express-style routing, middleware, mounted routers, and route parameters
+- Path parameters, wildcards, optional groups, case-sensitive and strict routing
+- Request helpers for headers, content negotiation, cookies, and query data
+- Response helpers for text, JSON, redirects, cookies, attachments, and conditional requests
+- Error middleware and route-scoped error handling
+- JSON, text, URL-encoded, and raw body parsers, with size limits and supported content encodings
+- Static-file serving and file downloads with cache validators, dotfile policies, and byte ranges
 
-## Status
+## Getting started
 
-**Phase 17: Polish** — complete.
+Add the repository as a dependency in `Cargo.toml`:
 
-The framework currently provides:
+```toml
+[dependencies]
+express-rs = { git = "https://github.com/RewireLab/express-rs" }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
 
-- TCP server with HTTP/1.1 support (via hyper)
-- Request parsing: method, path, headers, body, query parameters
-- Response writing: status, headers, text, JSON
-- Keep-alive connections
-- Async request processing
-- Routing: `app.get()`, `app.post()`, `app.put()`, `app.patch()`, `app.delete()`, `app.options()`, `app.head()`, `app.all()`
-- Middleware: `app.use()` with `next()` support
-- Route ordering: first match wins
-- Trailing slash handling: optional by default
-- **Path parameters:** `:id`, percent-decoded
-- **Wildcards:** `*splat`, capturing one or more segments
-- **Optional groups:** `{/:op}` and optional suffixes `user{s}`, `{.:ext}`
-- **Delimiters:** literal `.` and escaped `\(` `\)` inside paths
-- **`next('route')`:** skip to the next matching route
-- Case sensitivity toggle (`app.case_sensitive()`)
-- **Response:** `send()`, `json()`, `sendStatus()`, `set()`/`get()`/`append()`, `content_type()`, `location()`, `redirect()`, `vary()`, `status()`
-- **Request:** `header()`, `accepts()`, `acceptsEncodings()`/`acceptsCharsets()`/`acceptsLanguages()`, `is()`, `host()`/`hostname()`, `protocol()`/`secure()`, `xhr()`
-- **Error handling:** `use_error_handler()`, `next(NextCall::Error(..))`, `Err` from a handler
-- **Framing:** `Content-Length`, weak `ETag`, conditional-request `304`, `204`/`205` stripping, HEAD body suppression
-- **Content types:** extension resolution including Express 5's `text/javascript` for `.js`
-- **Error middleware:** `use_error_handler()`, `next(err)`, and a handler returning `Err` as the equivalent of a rejected promise
-- **Default error response:** 500 with the message, `Content-Security-Policy`, and `nosniff`, mirroring `finalhandler`
-- **Body parsing:** `body::json()`, `body::text()`, `body::urlencoded()`, `body::raw()` with content-type gating, `gzip`/`deflate`/`br`/`zstd` decompression, charset checks, size limits, and typed errors
-- **Static files:** `static_files::serve_static()` and `serve_static_at()` with content types, `ETag`/`Last-Modified` caching, conditional requests, single ranges, index files, and trailing-slash redirects
-- **Cookies:** `res.cookie()` and `res.clear_cookie()` with attribute options, and built-in `req.cookies()` parsing
-- **File sending:** `static_files::send_file()` and `download()` with root confinement, dotfile policy, conditional requests, and ranges
-- **Content negotiation:** `response::format()` picks a body by `Accept`, with extension keys, a default fallback, `Vary: Accept`, and 406 when nothing matches
-- **Raw bodies:** `body::raw()` stores the undecoded bytes behind content-type gating, size limits, and inflation
-- **Parameter callbacks:** `app.param()` runs before any matched layer binding that name, at most once per request
-- **Route-scoped error handlers:** `app.get_with_error()` and friends pair a handler with its own error handler
-- **Mounted routers:** `app.mount("/api", sub_router)` with relative paths, fallthrough to the parent, `next('router')`, and parent error middleware catching sub-router errors
-- **Signed cookies:** `cookie_signed()` emits `s:<value>.<hmac>`; `signed_cookies()` verifies against a secret
-- **Settings:** `app.disable("x-powered-by")` drops the `X-Powered-By` header Express sends by default
-- **Strict routing:** `app.strict()` makes a route's trailing slash significant
-- **`res.attachment()`** and **`req.fresh()` date comparison** complete the response and freshness APIs
-
-## Quick Start
+Create `src/main.rs`:
 
 ```rust
 use express_rs::App;
@@ -60,19 +36,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new();
 
     app.get("/", |_req, mut res, _next, _params| async move {
-        res.status(200).send("Hello, World!");
+        res.send("Hello, world!");
         Ok(res)
     });
 
-    app.get("/user/:id", |_req, mut res, _next, params| async move {
-        let id = params.get("id").map_or("", |v| v);
-        res.send(&format!("user {}", id));
-        Ok(res)
-    });
-
-    // Error middleware takes the error as its first argument.
-    app.use_error_handler(|err, _req, mut res, _next, _params| async move {
-        res.status(err.status()).send(&err.message());
+    app.get("/users/:id", |_req, mut res, _next, params| async move {
+        let id = params.get("id").map_or("", String::as_str);
+        res.json(&serde_json::json!({ "id": id }));
         Ok(res)
     });
 
@@ -81,273 +51,85 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Architecture
+Run the application with `cargo run`, then visit `http://localhost:3000`.
 
+Handlers receive the request, response, continuation function, and matched parameters. They return `Result<Response, Error>`; returning `Err` forwards the error to error middleware.
+
+## Compatibility
+
+The API follows familiar Express conventions while using Rust-native types and ownership. This project implements a useful subset of Express 5; it does not promise drop-in compatibility.
+
+Notable differences include:
+
+- Route parameters are passed to handlers as a `HashMap<String, String>` rather than through `req.params`.
+- Wildcard parameters are joined into one string rather than returned as an array.
+- Handlers return the response, and failures use `Result`; Rust closures do not use JavaScript function arity to identify error handlers.
+- Error middleware is registered with `use_error_handler()`. Route-scoped error handling pairs one route handler with one error handler.
+- Some Express helpers have Rust names, such as `content_type()` in place of `type()`.
+- Proxy headers are not trusted; `protocol()` reports `http` until trust-proxy support is added.
+- Extended URL-encoded parsing supports common nested forms but not the full `qs` grammar.
+- Static and file responses buffer the selected bytes in memory. Range responses read only the requested range.
+
+The implementation also differs in smaller edge cases. See the source and tests for details before relying on exact Express error messages or option behavior.
+
+## Performance
+
+The included benchmark compares the Rust example server with a small Express 5 app using matching endpoints. This is a microbenchmark, not a general application performance claim.
+
+Latest recorded run:
+
+| Endpoint | express-rs (req/s) | Express 5 (req/s) | Throughput ratio | p99 express-rs | p99 Express 5 |
+|---|---:|---:|---:|---:|---:|
+| `GET /hello` | 44,031 | 17,952 | 2.45× | 0.0 ms | 1.0 ms |
+| `GET /json` | 39,655 | 17,631 | 2.25× | 0.0 ms | 1.0 ms |
+| `GET /user/42` | 45,625 | 16,177 | 2.82× | 0.0 ms | 1.0 ms |
+| `GET /chain` (5 middleware) | 45,409 | 17,958 | 2.53× | 0.0 ms | 1.0 ms |
+
+In this run, all endpoints passed the harness's 1.5× throughput threshold with zero errors. The aggregate throughput ratio was approximately 2.51×. Results vary by machine and run; p99 latency is rounded to milliseconds, and the load generator may limit the measured throughput of the faster server. Repeat measurements when evaluating changes.
+
+The harness builds express-rs in release mode and measures both servers back-to-back with 8 `autocannon` connections, a 2-second warm-up, and a 10-second sample per endpoint. The recorded Express run used Node v26.8.1.
+
+```sh
+./bench/run.sh
 ```
-src/
-  lib.rs       — crate root, public API
-  app.rs       — Application struct (user-facing API)
-  server.rs    — HTTP server (TCP listener, connection handling)
-  router.rs    — Router (layer stack, dispatch, next())
-  path.rs      — Path pattern matcher (params, wildcards, optionals)
-  request.rs   — Request wrapper (method, path, headers, body, query)
-  response.rs  — Response wrapper (status, headers, body)
-  body.rs      — Body parsing middleware (JSON, text, forms)
-  cookies.rs   — Cookie parsing and `Set-Cookie` serialisation
-  static_files.rs — Static file middleware (serve-static equivalent) plus `send_file()`/`download()` (send equivalent)
-  mime.rs      — Content type resolution and charset handling
-  etag.rs      — Entity tag generation and comparison
-  error.rs     — Error types
+
+To use alternate ports:
+
+```sh
+PORT_RS=3101 PORT_JS=3102 ./bench/run.sh
 ```
 
-### Request flow
+The harness requires Node.js and npm/npx. It can also be tuned with `CONNECTIONS`, `WARMUP`, `DURATION`, `ENDPOINTS`, and `MIN_RATIO` environment variables.
 
-```
-TCP connection → hyper HTTP/1.1 parser → Incoming request
-  → collect body → Request::new()
-  → Router::handle()
-    → iterate layer stack
-    → for each matching layer, execute handlers
-    → if handler calls next(), continue to next layer
-    → if handler does not call next(), stop
-  → Response::into_hyper_response() → hyper writes to TCP
-```
+## Development
 
-### Design decisions
+Run the formatter, compiler, linter, and test suite with:
 
-| Decision | Rationale |
-|---|---|
-| **hyper** for HTTP | Most mature Rust HTTP library. Handles HTTP/1.1 parsing, keep-alive, pipelining, connection management. We build the Express-like abstraction on top. |
-| **tokio** for async | Standard Rust async runtime. Required by hyper. |
-| **http** crate for types | `Method`, `StatusCode`, `HeaderMap`, `Uri` — standard HTTP types used across the ecosystem. |
-| **http-body-util** | Body collection utilities (`BodyExt::collect`). |
-| **hyper-util** | Tokio I/O adapter (`TokioIo`) for hyper connections. |
-| **Handler returns Response** | The handler takes ownership of `Response`, mutates it, and returns it. This avoids lifetime issues with `&mut Response` in async contexts. |
-| **Arc\<Request\>** | Request is wrapped in `Arc` so it can be shared across middleware, matching Express's behavior where the request object is shared between handlers. |
-| **Router with layer stack** | Inspired by `pillarjs/router`. Layers are matched in order; `next()` continues to the next matching layer. |
-| **Hand-written path matcher** | `path.rs` implements the Express 5 subset of `path-to-regexp`: params, wildcards, optional groups, delimiters, and escapes, with backtracking. No regex crate needed. |
-| **Mandatory-variant pass** | Optional groups are resolved by first trying a variant with every group required, which binds `:name` and `.format` correctly instead of letting a greedy param swallow the delimiter. |
-| **Finalisation in the server** | Express applies `Content-Length`, ETag, freshness, and HEAD suppression inside `res.send()`, where the response can see the request. Here the handler owns the response, so the server applies those steps after it returns, in the same order Express does. |
-| **HeadBody** | A body that reports a length but yields no bytes. hyper derives framing from the body it is handed, so simply emptying the body for HEAD would also drop `Content-Length`. |
-| **serde for JSON** | `res.json(&value)` serialises any `Serialize` type rather than taking a pre-built string, which is the useful shape in Rust. `json_str()` covers the raw case. |
-| **HEAD falls back to GET** | Express's `Route#_handlesMethod` maps HEAD onto GET when no HEAD handler is registered, so `app.get()` routes still answer HEAD requests. |
-| **Handlers return `Result<Response, Error>`** | Express 5 forwards a rejected promise to error middleware. `Err` is the Rust equivalent, and it is the only way an `async` handler can report failure given that it returns the response. |
-| **Error handlers take the error by value** | A borrowed `&Error` cannot be captured by an `async` block, which would make `async fn` error handlers unwritable. |
-| **sha1 for ETag** | Express's ETag format is `"<hexlen>-<27 chars of base64 SHA-1>"`; matching it needs a real SHA-1 rather than a stand-in hash. |
-| **`use_error_handler` instead of arity** | Express tells handlers and error handlers apart by `fn.length === 4`. Rust closures cannot be inspected that way, so the distinction lives in the signature: `use_error_handler` takes the error as its first parameter and the compiler enforces it. |
-| **Route layers skipped while an error is pending** | Express's `Router#handle` does `if (layerError) { match = false }`, so only middleware can catch an error. Replicated literally. |
-| **Parsed body behind a lock** | Handlers receive the request behind an `Arc`, so the parsed body lives in an `RwLock<Option<ParsedBody>>`. Parsers store it; handlers clone it out. |
-| **flate2, brotli, and zstd for decompression** | body-parser supports `gzip`, `deflate`, and `br` (plus `zstd` on new Node). `flate2` covers the first two from memory, `brotli` the third, `zstd` the last. |
-| **Decompression capped at limit + 1** | The size limit applies to the decompressed stream, as `raw-body` sees it. Reading is capped so a compression bomb cannot exhaust memory. |
-| **Hand-rolled form nesting** | `serde_urlencoded` stays flat, so extended `a[b]` nesting is a small parser with the same `parameterLimit` and `depth` defaults as `qs`. |
-| **Canonical confinement for static files** | `send` checks `..` lexically and follows symlinks wherever they lead. Paths here are canonicalized and must stay under the root, so a symlink escape answers 404. |
-| **Stat-based weak ETags for files** | `send` tags the stat result instead of hashing content, so large files never pay for a digest. Same shape here: `W/"<hexlen>-<hexmtime>"`. |
-| **`max_age_secs` in seconds** | Express accepts milliseconds or strings like `"1d"`. Seconds as `u64` need no string parser and no float clamping. |
-| **Cookies parsed eagerly on the request** | Express fills `req.cookies` through the `cookie-parser` middleware. The parse is cheap, so it happens in `Request::new` beside the query string and is always available. |
-| **`Set-Cookie` bypasses `append()`** | `res.append()` comma-joins values, which would merge distinct cookies into one broken header. `res.cookie()` appends real header instances instead. |
-| **No throw for invalid cookie options** | Express throws `TypeError` for a control-character name or `partitioned` without `secure`. A handler here has no error channel, so both cases are dropped silently. |
-| **`send_file` errors are `Result`** | Express's `res.sendFile` without a callback forwards failures to `next(err)`; with a callback the handler inspects the error. `Result<Response, Error>` is both — return the `Err` to reach error middleware, or match on it. |
-| **Root confinement for `send_file`** | Express resolves through `path.resolve`, which lets an absolute `path` bypass the `root` option entirely. Here an absolute path with a root is refused, and the resolved file must stay under the root — the same stance the static middleware takes on symlinks. |
-| **Manual `Default` for option structs** | A derived `Default` zeroed every flag once already (`StaticOptions` in the static-files phase); `SendFileOptions` carries a hand-written impl so the send defaults — ETag, freshness, ranges, cache-control all on — survive. |
-| **`format()` is a free function** | It must read the request's `Accept` header, and a `Response` method cannot see the request — the same reason finalisation lives in the server. `response::format(&req, res, |f| ...)`. |
-| **Parameter callbacks dispatched, not layered** | `app.param()` callbacks are not stack layers; the router consults the registry when a layer's bound params name one, then runs the callback inline before that layer's handlers — which is how a callback registered after a route still applies, and how the once-per-request cache works. |
-| **Signed cookies verify before decoding** | The HMAC covers the still-encoded value, so verification re-reads the raw `Cookie` header and only the verified result is percent-decoded. The secret rides in the call, because a `Response` cannot see the request the way Express's `res` reaches `req.secret`. |
-| **`X-Powered-By` applied after finalisation** | Express stamps the header at request start; doing it after the response finishes means error pages carry it too, and an absent-check keeps a handler's own value. |
-| **Mounting strips the prefix for matching only** | Express rewrites `req.url` when a sub-app takes over, so `req.path()` inside it excludes the mount. The request here is behind an `Arc` and cannot be rewritten, so a mounted router matches against the stripped path while `req.path()` still shows the full one. |
-| **Route-scoped error handlers as paired arguments** | Express tells handlers and error handlers apart by arity inside one route's stack. Rust closures expose no arity, so the pairing is explicit: `get_with_error(path, handler, err_handler)` puts both on one layer, and the route's dispatch gives its own handler's failure to its error handler before any global one. |
-
-### Dependencies
-
-| Crate | Purpose |
-|---|---|
-| `tokio` | Async runtime (rt-multi-thread, net, macros) |
-| `hyper` | HTTP/1.1 server implementation |
-| `hyper-util` | Tokio I/O adapter for hyper |
-| `http` | HTTP types (Method, StatusCode, HeaderMap, Uri) |
-| `http-body` | `Body` trait, needed for the HEAD body type |
-| `http-body-util` | Body collection utilities |
-| `bytes` | Efficient byte buffers |
-| `serde` / `serde_json` | JSON serialisation for `res.json()` |
-| `sha1` | ETag generation |
-| `sha2` + `hmac` | cookie signatures (HMAC-SHA256) |
-| `flate2` | `gzip` and `deflate` body decompression |
-| `zstd` | `zstd` body decompression |
-| `brotli` | `br` body decompression |
-| `httpdate` | `Last-Modified` formatting and `If-Modified-Since` parsing |
-
-## Compatibility matrix
-
-| Feature | Status | Notes |
-|---|---|---|
-| HTTP server | ✅ | hyper-backed |
-| Request parsing | ✅ | method, path, headers, body, query |
-| Response writing | ✅ | status, headers, text, JSON |
-| Keep-alive | ✅ | hyper handles this |
-| `app.get()` / `app.post()` etc. | ✅ | |
-| `app.all()` | ✅ | matches all methods |
-| `app.use()` middleware | ✅ | with `next()` support |
-| Route ordering | ✅ | first match wins |
-| Trailing slash | ✅ | optional by default |
-| Route parameters (`:id`) | ✅ | percent-decoded |
-| Wildcards (`*splat`) | ✅ | one or more segments |
-| Optional groups (`{/:op}`) | ✅ | including `user{s}`, `{.:ext}` |
-| Dot delimiter / escapes | ✅ | `.:ext`, `\(`, `\)` |
-| `next('route')` | ✅ | skip to next route |
-| Case sensitivity | ✅ | `app.case_sensitive()` |
-| `res.send()` | ✅ | string, typed JSON, bytes |
-| `res.json()` | ✅ | any `Serialize` value |
-| `res.sendStatus()` | ✅ | reason phrase as text |
-| `res.set()` / `get()` / `append()` | ✅ | |
-| `res.content_type()` | ✅ | Express's `type()`; `type` is a Rust keyword |
-| `res.location()` / `redirect()` | ✅ | Express 5 `redirect(status, url)` order |
-| `res.vary()` | ✅ | de-duplicates on a second add |
-| `res.status()` validation | ⚠️ | out-of-range codes ignored, not thrown |
-| `next(err)` → error middleware | ✅ | `NextCall::Error` or a returned `Err` |
-| Error middleware arity | ⚠️ | `use_error_handler()`, not `fn.length === 4` |
-| Route-scoped error handlers | ✅ | `get_with_error` etc.; one handler + one error handler |
-| Rejected promise → error handler | ✅ | a handler returning `Err` |
-| Default 500 on unhandled error | ✅ | message plus CSP and `nosniff` |
-| Weak ETag on `send()` | ✅ | matches the `etag` package format |
-| Conditional request → 304 | ✅ | `If-None-Match` |
-| HEAD body suppression | ✅ | keeps `Content-Length` |
-| `req.header()` | ✅ | `referer`/`referrer` interchangeable |
-| `req.accepts()` family | ✅ | returns the offered string, not the MIME type |
-| `req.is()` | ✅ | full type or extension |
-| `req.host()` / `hostname()` | ✅ | Express 5 keeps the port |
-| `req.xhr()` | ✅ | |
-| `req.fresh()` | ✅ | ETag and `If-Modified-Since`, whole-second precision |
-| Strict routing | ✅ | enforced on routes; middleware prefixes stay lenient |
-| `next('router')` | ✅ | exits a mounted router to its parent |
-| `app.param()` callbacks | ✅ | one name per call; the value arrives in `params` |
-| `res.cookie()` | ✅ | `CookieOptions` carries the attributes |
-| `res.clearCookie()` | ✅ | `clear_cookie()`; forces epoch expiry |
-| Cookie parsing (`req.cookies`) | ✅ | built in; Express needs the `cookie-parser` middleware |
-| Signed cookies | ✅ | `cookie_signed()` / `signed_cookies()`; the secret rides in the call |
-| `res.format()` | ✅ | `response::format()`; handlers take the `Response` only |
-| `res.sendFile()` | ✅ | `static_files::send_file()`; errors surface as `Result` |
-| `res.download()` | ✅ | `static_files::download()`; `Content-Disposition` attachment |
-| Body parsing (JSON, text, form) | ✅ | `body::json()`, `body::text()`, `body::urlencoded()` |
-| Extended form nesting | ⚠️ | `a[b]` subset, not full `qs` |
-| Raw bodies | ✅ | `body::raw()` |
-| `zstd` content encoding | ✅ | Express gates it on the Node version; always on here |
-| `X-Powered-By: Express` | ✅ | sent by default; `app.disable("x-powered-by")` removes it |
-| Static files | ✅ | `static_files::serve_static()` / `serve_static_at()` |
-| Dotfile policy | ✅ | ignore (default), allow, deny |
-| Directory index + redirect | ✅ | `index.html` default, 301 to trailing slash |
-| Static conditional + range | ✅ | ETag/date freshness, single ranges, 206/304/412/416 |
-
-### Known differences from Express
-
-- Wildcard params are joined with `/` into a single string rather than exposed as an array.
-- `req.params` is delivered to handlers as a `HashMap<String, String>` argument instead of living on the request object.
-- Strict routing is accepted but not yet enforced; trailing slashes are always optional.
-- Handlers must return the `Response`, because Rust ownership makes an out-parameter awkward across an await point.
-- `res.status()` ignores out-of-range codes instead of throwing `TypeError`/`RangeError`, because a handler here returns the `Response` rather than a `Result` and has no channel to report the failure.
-- `res.redirect()` takes the Express 5 `(status, url)` order only; the legacy `(url, status)` order is gone.
-- `content_type()` replaces `type()`, which is a reserved word in Rust.
-- `append()` comma-joins values into one header, so `Set-Cookie` is not supported.
-- `protocol()` always reports `http`; `X-Forwarded-Proto` is not trusted without a trust-proxy setting.
-- `req.fresh()` compares ETags but not `If-Modified-Since` timestamps, which would need a date parser.
-- `accepts()` returns the string that was offered rather than the resolved MIME type.
-
-### Known differences in error handling
-
-- Handlers return `Result<Response, Error>` rather than `Response`, so an `async` failure has somewhere to go. Express 5's rejected-promise forwarding maps onto this directly.
-- Error middleware is registered with `use_error_handler()` and takes the error as its first argument. Express infers this from `fn.length === 4`, which Rust closures cannot expose.
-- The error is passed **by value**, since a borrowed reference cannot be captured by an `async` block.
-- Returning `Err` discards any headers the handler had already set. Express keeps a single `res` object for the whole request, so headers set before `next(err)` normally survive — and they still do here, as long as the handler returns `Ok(res)` rather than `Err`. `test_returning_err_loses_headers_set_before_it` pins this behaviour.
-- **Route-scoped error handlers cover one handler each.** `app.get(path, fn, errFn)` pairs the two explicitly: `get_with_error(path, fn, errFn)`. Express chains N handlers followed by error handlers in one route; here a route carries exactly one of each. An error raised outside the route still skips the whole layer, reaching ordinary error middleware — the router's skip rule, unchanged from Express.
-
-### Known differences in body parsing
-
-- Extended `a[b]` nesting covers objects, arrays, `[]` appends, and numeric indices — not the full `qs` grammar (`charsetSentinel` and `interpretNumericEntities` do not exist here).
-- Only `utf-8`, `iso-8859-1`, and `windows-1252` decode properly; other charsets fall back to lossy UTF-8.
-- The JSON strict-violation message differs from V8's `SyntaxError` text; the status (400) and kind (`entity.parse.failed`) match.
-- The error `kind` (Express's `.type`) is exposed as `kind()` because `type` is a Rust keyword.
-- `verify` receives `(request, bytes, charset)` and returns `Result<(), String>` instead of throwing.
-
-### Known differences in static files
-
-- Symlink escapes answer 404. `send` follows symlinks outside the root; this confinement is stricter on purpose.
-- Files are read fully into memory rather than streamed. Large files pay for one allocation per request.
-- The 416 answer carries no `Content-Range` header and the error page shape follows the default error handler (plain text), not `send`'s HTML document.
-- `If-Modified-Since` compares at whole-second precision.
-- `max_age_secs` takes seconds; Express takes milliseconds or duration strings.
-- Extension fallback (`extensions` option) is implemented. Directory listing was never part of `serve-static` and is not implemented either.
-
-### Known differences in cookies
-
-- Signed cookies take the secret per call (`cookie_signed(name, value, secret, options)`, `signed_cookies(secret)`) rather than from an app-wide `secret` setting.
-- Signature verification re-parses the raw `Cookie` header undecoded; `req.cookies()` keeps signed entries where cookie-parser removes them, so a signed cookie appears in both unless the call site filters.
-- The `encode`/`decode` options do not exist. Values always go out `encodeURIComponent`-encoded and come in percent-decoded; an escape that does not decode is kept raw rather than failing the request the way `cookie-parser` surfaces a 500.
-- `max_age_secs` takes seconds and also derives `Expires` from the current time, matching what Express does with `maxAge`.
-- `partitioned` without `secure` is dropped silently; Express throws `TypeError`.
-- A name carrying a control character is refused (no header is set); Express throws `TypeError`. Other names the `cookie` package accepts — including oddities like `a=b` — pass through.
-- `priority: Medium` is omitted from the header because it is the browser default, the same rule Express applies.
-- `clear_cookie` drops a caller-supplied `max_age`. Express's `clearCookie` would let it overwrite the epoch expiry and keep the cookie alive.
-- When a request carries the same cookie name twice, the first occurrence wins.
-
-### Known differences in file sending
-
-- Without `root`, `path` must be absolute; a relative path is a 500 carrying Express's "path must be absolute or specify root" message. Express throws the equivalent `TypeError` synchronously.
-- With `root`, an absolute `path` is refused. Express's `path.resolve(root, path)` would let it escape the root outright; confinement here forbids it.
-- The `dotfiles` policy applies to every component of the supplied path, so a dotfile deep inside an absolute path is hidden or refused the same way one under `root` is.
-- `extensions`, `start`, and `end` from the `send` options are not supported.
-- `Content-Disposition` is a subset of the `content-disposition` package: names within ISO-8859-1 are quoted with `"` and `\` escaped; names outside it gain a percent-encoded `filename*` parameter with a `_`-substituted fallback.
-- `download()` sets the header before sending, so a send failure discards it, exactly as Express loses the header to `next(err)`.
-
-### Known differences in mounted routers
-
-- `req.path()` inside a mounted router still shows the full path; only matching uses the stripped remainder, because the request is behind an `Arc` and cannot be rewritten the way Express rewrites `req.url`.
-- Middleware that relies on the request path — the static-file middleware, `req.route`-style introspection — sees the full path and needs the mount passed explicitly, as `serve_static_at` already does.
-- Mount parameters (`app.mount("/org/:org", sub)`) arrive in the sub-router's `params` alongside its own; the sub-router's `app.param()` callbacks fire for its own parameters, and the parent's fire for the mount's.
-- A sub-router error bubbles to the parent's error middleware; the sub-router is skipped entirely while that error is pending.
-
-### Known differences in parameter callbacks
-
-- The bound value arrives in `params` rather than as dedicated `value`/`name` arguments, since the callback shape is the same as any middleware's.
-- One name per call: Express's `app.param(['id', 'user'], fn)` is two `app.param` calls here.
-- A callback may return its response without calling `next()`, which short-circuits the layer; in Express that shape would hang, because `next` is the only way forward.
-- While an error from a callback is pending, later layers are skipped; once an error handler clears it, a later matching layer replays the stored failure — the same outcome Express produces.
-
-### Known differences in content negotiation
-
-- Handlers receive the `Response` only. Express passes `(req, res, next)`; here the request is in scope at the call site, and `next` has no equivalent — the handler returns the response or an `Err`.
-- The fallback is a `.default()` method rather than a `default` key in the object.
-- Keys go through `req.accepts()`, so extensions and full types both work and the chosen key is reported back as offered; the `Content-Type` is that key normalised to a bare MIME type.
-- The 406 travels as an `Err`, so the `Vary: Accept` header `format()` had already set is discarded on the way to the error handler. Express's `finalhandler` writes onto the original response, where the header survives.
-- The chosen handler's `send()`/`json()` applies the usual charset rules afterwards, so a text type gains `charset=utf-8` just as it would outside `format()`.
-
-## Testing
-
-```bash
+```sh
+cargo fmt --check
+cargo check
+cargo clippy
 cargo test
 ```
 
-Integration tests start a real server on a random port and make actual HTTP requests over TCP.
+Integration tests start the server on a random local port and exercise it over HTTP.
 
-- 123 unit tests across the path matcher, MIME, ETags, request negotiation, errors, body parsing, static helpers, cookies (including signatures), content disposition, and type normalisation
-- 177 integration tests covering the HTTP foundation, routing, middleware, path syntax, the response/request API, error propagation, body parsing (including raw), static files, cookies (including signed), file sending, content negotiation, parameter callbacks, route-scoped errors, mounted routers, and the polish settings
+## Architecture
 
-```bash
-cargo fmt --check   # formatting
-cargo check         # compilation
-cargo clippy        # lints
-cargo test          # tests
-```
+The server uses Hyper for HTTP/1.1 connections and Tokio for asynchronous I/O. The application layer provides the Express-like API; the router evaluates middleware and route layers in registration order. Request and response wrappers expose framework helpers while using types from Rust's `http` ecosystem.
 
-## Benchmarks
+Key implementation modules:
 
-Measured with `bench/run.sh`: the express-rs server (`examples/bench_server.rs`) and an Express 5 app (`bench/express_app.js`) with identical endpoints run back-to-back on the same machine, each driven by `autocannon` with 8 connections after a 2-second warmup, 10 seconds measured per endpoint. express-rs in release mode; Node v26.8.1 for Express. Absolute numbers are machine-specific — the comparison is the point. With 8 connections the load client is likely the ceiling on the fastest stack, so read express-rs's numbers as a floor.
-
-| Endpoint | express-rs (req/sec) | Express 5 (req/sec) | Ratio | p99 express-rs | p99 Express 5 |
-|---|---|---|---|---|---|
-| `GET /hello` | 50,716 | 19,310 | 2.6× | 0.0 ms | 1.0 ms |
-| `GET /json` | 54,176 | 19,338 | 2.8× | 0.0 ms | 0.0 ms |
-| `GET /user/42` | 51,766 | 18,460 | 2.8× | 0.0 ms | 1.0 ms |
-| `GET /chain` (5 middleware) | 54,419 | 19,049 | 2.9× | 0.0 ms | 1.0 ms |
-
-Zero errors and zero non-2xx responses in every run. The five-deep middleware chain costs express-rs nothing measurable over hello-world at this load; Express shows the same flatness, its bottleneck lying elsewhere. Re-run with `./bench/run.sh` after any change to the dispatch path — the harness rebuilds, starts both servers, warms up, and prints the table.
+| Module | Responsibility |
+|---|---|
+| `app` | Application API and route registration |
+| `server` | Listener, connection handling, and response finalization |
+| `router` | Middleware stack, route dispatch, and continuation flow |
+| `path` | Route pattern parsing and matching |
+| `request`, `response` | Request and response helpers |
+| `body`, `cookies` | Body parsing and cookie handling |
+| `static_files` | Static serving, file sending, and downloads |
+| `mime`, `etag`, `error` | Content types, entity tags, and errors |
 
 ## License
 
@@ -355,4 +137,4 @@ MIT
 
 ## Attribution
 
-Express.js is MIT licensed. This is an independent Rust implementation inspired by Express.js — no Express source code is copied. Behavior was derived from the public API, the documentation, and reading the Express and `pillarjs/router` sources and their test suites.
+Express.js is MIT licensed. This project is an independent implementation; it does not copy Express source code. Its behavior is informed by public documentation, APIs, and test suites, including those for Express and `pillarjs/router`.

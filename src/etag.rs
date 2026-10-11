@@ -5,24 +5,34 @@
 //! in hex, a dash, then the first 27 characters of the base64 SHA-1 of
 //! the body.
 
+use std::fmt::Write;
+
 use sha1::{Digest, Sha1};
 
 /// Generate a weak entity tag, e.g. `W/"1a-b0aWv0CkplYw1k1RvHb8YBPdSg"`.
 pub fn weak(body: &[u8]) -> String {
-    format!("W/{}", strong(body))
+    tag(body, true)
 }
 
 /// Generate a strong entity tag, e.g. `"1a-b0aWv0CkplYw1k1RvHb8YBPdSg"`.
 pub fn strong(body: &[u8]) -> String {
+    tag(body, false)
+}
+
+fn tag(body: &[u8], weak: bool) -> String {
     let mut hasher = Sha1::new();
     hasher.update(body);
     let digest = hasher.finalize();
 
-    format!(
-        "\"{:x}-{}\"",
-        body.len(),
-        base64(&digest).chars().take(27).collect::<String>()
-    )
+    let mut out = String::with_capacity(48);
+    if weak {
+        out.push_str("W/");
+    }
+    out.push('"');
+    write!(&mut out, "{:x}-", body.len()).expect("writing to String cannot fail");
+    base64_prefix(&digest, 27, &mut out);
+    out.push('"');
+    out
 }
 
 /// True when `etag` satisfies `if_none_match`.
@@ -51,11 +61,11 @@ fn normalize(tag: &str) -> String {
         .to_string()
 }
 
-/// Standard base64 alphabet encoder.
-fn base64(bytes: &[u8]) -> String {
+/// Write a prefix of a standard base64 encoding directly into `out`.
+fn base64_prefix(bytes: &[u8], limit: usize, out: &mut String) {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    let start = out.len();
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = *chunk.get(1).unwrap_or(&0) as u32;
@@ -63,19 +73,30 @@ fn base64(bytes: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
 
         out.push(TABLE[(n >> 18) as usize & 0x3f] as char);
+        if out.len() - start >= limit {
+            return;
+        }
         out.push(TABLE[(n >> 12) as usize & 0x3f] as char);
+        if out.len() - start >= limit {
+            return;
+        }
         if chunk.len() > 1 {
             out.push(TABLE[(n >> 6) as usize & 0x3f] as char);
         } else {
             out.push('=');
+        }
+        if out.len() - start >= limit {
+            return;
         }
         if chunk.len() > 2 {
             out.push(TABLE[n as usize & 0x3f] as char);
         } else {
             out.push('=');
         }
+        if out.len() - start >= limit {
+            return;
+        }
     }
-    out
 }
 
 #[cfg(test)]

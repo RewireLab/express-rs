@@ -19,4 +19,5 @@ app.get('/json', (req, res) => res.json({ message: 'Hello, World!' }));
 app.get('/user/:id', (req, res) => res.send('user ' + req.params.id));
 app.get('/chain', (req, res) => res.send('chained'));
 
-app.listen(3002, () => console.log('express on 3002'));
+const port = Number.parseInt(process.env.PORT_JS || '3002', 10);
+app.listen(port, () => console.log(`express on ${port}`));

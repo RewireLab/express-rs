@@ -140,7 +140,11 @@ impl Response {
     /// charset unless a `Content-Type` is already set, in which case the
     /// charset is applied to whatever is there.
     pub fn send(&mut self, body: &str) -> &mut Self {
-        match self.get("content-type") {
+        match self
+            .headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+        {
             Some(existing) => {
                 let with_charset = mime::set_charset(&existing, "utf-8");
                 self.set("content-type", &with_charset);
@@ -158,7 +162,7 @@ impl Response {
     /// A `Content-Type` is only defaulted when none is set, matching how
     /// Express treats a Buffer.
     pub fn send_bytes(&mut self, body: &[u8]) -> &mut Self {
-        if self.get("content-type").is_none() {
+        if !self.headers.contains_key("content-type") {
             self.content_type("bin");
         }
         self.body = Some(Bytes::from(body.to_vec()));
@@ -183,7 +187,7 @@ impl Response {
 
     /// Send an already-serialised JSON document.
     pub fn json_str(&mut self, raw: &str) -> &mut Self {
-        if self.get("content-type").is_none() {
+        if !self.headers.contains_key("content-type") {
             self.set("content-type", "application/json");
         }
         self.send(raw)
@@ -345,10 +349,10 @@ impl Response {
     pub(crate) fn finish(&mut self, req: &Request) {
         // Content-Length, unless the caller manages framing themselves.
         let has_transfer_encoding = self
+            .headers
             .get("transfer-encoding")
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
-        let generating_etag = self.get("etag").is_none();
+            .is_some_and(|value| !value.is_empty());
+        let generating_etag = !self.headers.contains_key("etag");
 
         let body_len = self.body.as_ref().map(|b| b.len());
         if !has_transfer_encoding {

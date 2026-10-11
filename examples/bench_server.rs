@@ -1,8 +1,8 @@
 //! Benchmark server for express-rs.
 //!
 //! Run with `cargo run --release --example bench_server`. Serves the
-//! four benchmark endpoints on port 3001, mirroring bench/express_app.js
-//! endpoint for endpoint.
+//! four benchmark endpoints on port 3001 by default, mirroring
+//! bench/express_app.js endpoint for endpoint. Override with `PORT_RS`.
 
 use express_rs::router::NextCall;
 use express_rs::App;
@@ -40,6 +40,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(res)
     });
 
-    app.listen(3001).await?;
+    let port = std::env::var("PORT_RS")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(3001);
+    eprintln!("express-rs on {port}");
+    app.listen(port).await?;
     Ok(())
 }

@@ -24,6 +24,7 @@
 //! ));
 //! ```
 
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -665,16 +666,37 @@ async fn serve_file(
         }
     }
 
-    let bytes = tokio::fs::read(path)
+    // Read only the selected representation. Reading the whole file before
+    // slicing made a one-byte range request allocate the entire file size.
+    let mut file = tokio::fs::File::open(path)
         .await
         .map_err(|_| Error::with_status(500, "failed to read file"))?;
-    let end = (offset + length).min(bytes.len() as u64) as usize;
-    let start = offset.min(bytes.len() as u64) as usize;
-    let slice = bytes.get(start..end).unwrap_or(&[]);
+    if offset > 0 {
+        use tokio::io::AsyncSeekExt;
+        file.seek(SeekFrom::Start(offset))
+            .await
+            .map_err(|_| Error::with_status(500, "failed to read file"))?;
+    }
+    let mut bytes = Vec::new();
+    let mut remaining = length;
+    let mut chunk = [0u8; 64 * 1024];
+    while remaining > 0 {
+        use tokio::io::AsyncReadExt;
+        let read_len = chunk.len().min(remaining.min(usize::MAX as u64) as usize);
+        let count = file
+            .read(&mut chunk[..read_len])
+            .await
+            .map_err(|_| Error::with_status(500, "failed to read file"))?;
+        if count == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..count]);
+        remaining -= count as u64;
+    }
 
     res.status(status);
-    res.set("content-length", &slice.len().to_string());
-    res.set_body(bytes::Bytes::from(slice.to_vec()));
+    res.set("content-length", &bytes.len().to_string());
+    res.set_body(bytes::Bytes::from(bytes));
     Ok(res)
 }
 

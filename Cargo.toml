@@ -9,7 +9,7 @@ keywords = ["http", "web", "framework", "express"]
 categories = ["web-programming::http-server"]
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "fs", "io-util"] }
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http = "1"

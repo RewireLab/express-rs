@@ -497,8 +497,7 @@ impl Router {
     /// runs out with an error still pending, the router answers with a
     /// default 500, as Express's `finalhandler` does.
     pub async fn handle(&self, req: Arc<Request>, res: Response) -> Response {
-        let path = req.path().to_string();
-        match self.dispatch(&req, res, &path, HashMap::new()).await {
+        match self.dispatch(&req, res, req.path(), HashMap::new()).await {
             DispatchOutcome::Done(res) | DispatchOutcome::Continue(res) => res,
             DispatchOutcome::ContinueError(_res, err) => Response::internal_error(&err, &req),
         }
@@ -528,6 +527,13 @@ impl Router {
             error: None,
             param_outcomes: HashMap::new(),
         }));
+        let next: Next = Arc::new({
+            let state = state.clone();
+            move |call| {
+                let state = state.clone();
+                Box::pin(async move { apply_next_call(&state, call) })
+            }
+        });
         let mut res = res;
 
         loop {
@@ -708,15 +714,7 @@ impl Router {
                     }
                 }
                 HandlerFn::Request(handler) => {
-                    let state_clone = state.clone();
-                    let req_clone = req.clone();
-
-                    let next: Next = Arc::new(move |call| {
-                        let state = state_clone.clone();
-                        Box::pin(async move { apply_next_call(&state, call) })
-                    });
-
-                    handler(req_clone, res, next, params.clone()).await
+                    handler(req.clone(), res, next.clone(), params.clone()).await
                 }
                 HandlerFn::Error(handler) => {
                     // Take the error so the handler owns it; a subsequent

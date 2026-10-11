@@ -86,14 +86,15 @@ impl Request {
     /// `referer` and `referrer` are treated as interchangeable, matching
     /// the historic misspelling in the HTTP spec that Express honours.
     pub fn header(&self, name: &str) -> Option<&str> {
-        let lc = name.to_ascii_lowercase();
-        match lc.as_str() {
-            "referer" | "referrer" => self
-                .headers
+        if name.eq_ignore_ascii_case("referer") || name.eq_ignore_ascii_case("referrer") {
+            self.headers
                 .get("referrer")
                 .or_else(|| self.headers.get("referer"))
-                .and_then(|v| v.to_str().ok()),
-            _ => self.headers.get(&lc).and_then(|v| v.to_str().ok()),
+                .and_then(|v| v.to_str().ok())
+        } else {
+            // HeaderMap performs case-insensitive lookup, so don't allocate a
+            // lowercase copy for each access.
+            self.headers.get(name).and_then(|v| v.to_str().ok())
         }
     }
 

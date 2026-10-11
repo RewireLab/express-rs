@@ -72,8 +72,21 @@ impl Server {
                     let router = router.clone();
                     async move {
                         let (parts, body) = req.into_parts();
-                        let collected = body.collect().await.unwrap_or_default();
-                        let body_bytes = collected.to_bytes();
+                        // Do not turn a truncated or otherwise invalid body
+                        // into an empty request. Doing so can make application
+                        // handlers act on a different payload than the client
+                        // sent (for example, an incomplete update).
+                        let body_bytes = match body.collect().await {
+                            Ok(collected) => collected.to_bytes(),
+                            Err(_) => {
+                                let mut response = Response::new();
+                                response.status(400).send("failed to read request body");
+                                if x_powered_by {
+                                    response.set("x-powered-by", "Express");
+                                }
+                                return Ok::<_, Infallible>(response.into_hyper_response());
+                            }
+                        };
 
                         let request = Arc::new(Request::new(
                             parts.method,
@@ -88,7 +101,7 @@ impl Server {
                         // Applied after finalisation so error responses
                         // carry it too, and never over a handler's own
                         // value.
-                        if x_powered_by && response.get("x-powered-by").is_none() {
+                        if x_powered_by && !response.get_headers().contains_key("x-powered-by") {
                             response.set("x-powered-by", "Express");
                         }
                         let hyper_response = response.into_hyper_response();
