@@ -449,10 +449,9 @@ fn decompress(encoding: &str, input: &[u8], limit: usize) -> Result<Vec<u8>, Err
         "gzip" => Box::new(flate2::read::MultiGzDecoder::new(input)),
         "deflate" => Box::new(flate2::read::ZlibDecoder::new(input)),
         "br" => Box::new(brotli::Decompressor::new(input, 4096)),
-        "zstd" => Box::new(
-            zstd::stream::read::Decoder::new(input)
-                .map_err(|_| Error::with_kind(400, "entity.parse.failed", "failed to decompress body"))?,
-        ),
+        "zstd" => Box::new(zstd::stream::read::Decoder::new(input).map_err(|_| {
+            Error::with_kind(400, "entity.parse.failed", "failed to decompress body")
+        })?),
         _ => {
             return Err(Error::with_kind(
                 415,
